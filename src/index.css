@@ -1,0 +1,100 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Noto Sans SC', system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: #F8FAFC;
+  color: #0F172A;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #374151;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4B5563;
+}
+
+/* 玻璃拟态 */
+.glass {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.dark .glass {
+  background: rgba(17, 24, 39, 0.75);
+  border: 1px solid rgba(75, 85, 99, 0.3);
+}
+
+/* 阅片区纯黑背景 */
+.viewer-bg {
+  background: radial-gradient(ellipse at center, #0f1420 0%, #050810 100%);
+}
+
+/* 表格斑马纹 */
+.table-zebra tbody tr:nth-child(even) {
+  background-color: rgba(248, 250, 252, 0.5);
+}
+
+.dark .table-zebra tbody tr:nth-child(even) {
+  background-color: rgba(31, 41, 55, 0.4);
+}
+
+/* 状态标签样式 */
+.status-chip {
+  @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+}
+
+/* Tooltip 基础样式 */
+.tooltip {
+  @apply invisible opacity-0 transition-all duration-150 absolute z-50 px-2 py-1 text-xs
+         bg-gray-900 text-white rounded shadow-lg whitespace-nowrap pointer-events-none;
+}
+
+.tooltip-wrapper:hover .tooltip {
+  @apply visible opacity-100;
+}
