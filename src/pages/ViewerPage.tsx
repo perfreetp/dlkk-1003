@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight, MousePointer2, ZoomIn, Hand, Search,
   RotateCcw, RotateCw, FlipHorizontal, ChevronUp as ChevronUpIcon,
   Play, Pause, Grid3X3, Ruler, Triangle, CircleDot, Target, ArrowRight,
   Type, Trash2, Undo2, Split, Link, RefreshCw, LayoutGrid, User, Calendar,
-  MapPin, Scan, Layers, Maximize2, Minimize2
+  MapPin, Scan, Layers, Maximize2, Minimize2, History
 } from 'lucide-react'
 import { studies as mockStudies } from '@/mock/studies'
 import {
@@ -33,18 +34,28 @@ function maskPatientId(id: string): string {
 }
 
 export default function ViewerPage() {
-  const study = mockStudies[0]
+  const { studyId } = useParams<{ studyId: string }>()
+
+  const study = useMemo(() => {
+    if (studyId) {
+      const found = mockStudies.find(s => s.id === studyId)
+      if (found) return found
+    }
+    return mockStudies[0]
+  }, [studyId])
+
   const seriesList = study.series
 
   const {
     activeSeriesId, activeImageIndex, layout, zoom, rotation, flipH, flipV, pan,
     windowLevel, activeTool, annotations, syncMode, compareMode, autoPlay,
     expandedSeries, mouseCoord, mouseHU,
-    setActiveSeries, setActiveImageIndex, nextImage, prevImage,
+    setActiveStudy, setActiveSeries, setActiveImageIndex, nextImage, prevImage,
     setLayout, setZoom, rotateLeft, rotateRight, rotate180,
     setFlipH, setWindowLevel, applyPreset, setActiveTool,
     clearAnnotations, undoAnnotation, setSyncMode, setCompareMode,
-    setAutoPlay, toggleSeriesExpanded, setMouseCoord, resetView
+    setAutoPlay, toggleSeriesExpanded, setMouseCoord, resetView,
+    addAnnotation, setPan
   } = useViewerStore()
 
   const [effectiveSeriesId, setEffectiveSeriesId] = useState<string>(
@@ -53,6 +64,50 @@ export default function ViewerPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const autoPlayRef = useRef<number | null>(null)
+
+  const isPanDraggingRef = useRef(false)
+  const panStartRef = useRef({ x: 0, y: 0 })
+  const panInitialRef = useRef({ x: 0, y: 0 })
+  const [drawingPoints, setDrawingPoints] = useState<Array<{ x: number; y: number }>>([])
+  const annotationIdRef = useRef(0)
+
+  const [compareStudyId, setCompareStudyId] = useState<string>(mockStudies[1]?.id ?? '')
+  const [compareSeriesIndex, setCompareSeriesIndex] = useState<number>(0)
+  const [compareImageIndex, setCompareImageIndex] = useState<number>(0)
+  const [compareZoom, setCompareZoom] = useState<number>(1)
+  const [compareWindowLevel, setCompareWindowLevel] = useState<{ center: number; width: number }>({ center: 40, width: 400 })
+  const [compareAnnotations] = useState<any[]>([])
+  const compareCanvasRef = useRef<HTMLCanvasElement>(null)
+
+  const compareStudy = useMemo(() => {
+    return mockStudies.find((s) => s.id === compareStudyId) ?? mockStudies[1] ?? mockStudies[0]
+  }, [compareStudyId])
+
+  const compareSeriesList = compareStudy?.series ?? []
+
+  const compareActiveSeries = useMemo(() => {
+    return compareSeriesList[compareSeriesIndex] ?? compareSeriesList[0]
+  }, [compareSeriesList, compareSeriesIndex])
+
+  const compareDisplayImages = useMemo(() => {
+    if (!compareActiveSeries?.images?.length) return [] as Image[]
+    return compareActiveSeries.images
+  }, [compareActiveSeries])
+
+  const compareCurrentImage = useMemo(() => {
+    const idx = Math.min(compareImageIndex, compareDisplayImages.length - 1)
+    return compareDisplayImages[idx]
+  }, [compareImageIndex, compareDisplayImages])
+
+  const availableCompareStudies = useMemo(() => {
+    return mockStudies.filter((s) => s.id !== study.id)
+  }, [study.id])
+
+  const mainSeriesIndex = useMemo(() => {
+    const id = activeSeriesId || effectiveSeriesId
+    const idx = seriesList.findIndex((s) => s.id === id)
+    return idx >= 0 ? idx : 0
+  }, [activeSeriesId, effectiveSeriesId, seriesList])
 
   const activeSeries = useMemo(() => {
     const id = activeSeriesId || effectiveSeriesId
@@ -68,6 +123,52 @@ export default function ViewerPage() {
     const idx = Math.min(activeImageIndex, displayImages.length - 1)
     return displayImages[idx]
   }, [activeImageIndex, displayImages])
+
+  useEffect(() => {
+    if (studyId) {
+      setActiveStudy(studyId)
+      if (!expandedSeries.has(study.id)) {
+        toggleSeriesExpanded(study.id)
+      }
+    }
+    if (seriesList.length > 0) {
+      const firstSeriesId = seriesList[0].id
+      if (!activeSeriesId && !effectiveSeriesId) {
+        setActiveSeries(firstSeriesId)
+        setEffectiveSeriesId(firstSeriesId)
+      }
+    }
+  }, [studyId, study.id])
+
+  useEffect(() => {
+    if (!compareMode || !syncMode) return
+    const targetIdx = Math.min(mainSeriesIndex, compareSeriesList.length - 1)
+    if (targetIdx !== compareSeriesIndex) {
+      setCompareSeriesIndex(targetIdx)
+    }
+  }, [compareMode, syncMode, mainSeriesIndex, compareSeriesList.length, compareSeriesIndex])
+
+  useEffect(() => {
+    if (!compareMode || !syncMode) return
+    const targetIdx = Math.min(activeImageIndex, compareDisplayImages.length - 1)
+    if (targetIdx !== compareImageIndex) {
+      setCompareImageIndex(targetIdx)
+    }
+  }, [compareMode, syncMode, activeImageIndex, compareDisplayImages.length, compareImageIndex])
+
+  useEffect(() => {
+    if (!compareMode || !syncMode) return
+    if (compareWindowLevel.center !== windowLevel.center || compareWindowLevel.width !== windowLevel.width) {
+      setCompareWindowLevel({ center: windowLevel.center, width: windowLevel.width })
+    }
+  }, [compareMode, syncMode, windowLevel.center, windowLevel.width, compareWindowLevel])
+
+  useEffect(() => {
+    if (!compareMode || !syncMode) return
+    if (compareZoom !== zoom) {
+      setCompareZoom(zoom)
+    }
+  }, [compareMode, syncMode, zoom, compareZoom])
 
   useEffect(() => {
     if (!autoPlay || !displayImages.length) {
@@ -98,6 +199,13 @@ export default function ViewerPage() {
     const contrast = Math.max(0.5, Math.min(3, 0.6 + width / 600))
     return `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)})`
   }, [windowLevel])
+
+  const compareFilterStyle = useMemo(() => {
+    const { center, width } = compareWindowLevel
+    const brightness = Math.max(0.2, Math.min(2, 0.8 + center / 500))
+    const contrast = Math.max(0.5, Math.min(3, 0.6 + width / 600))
+    return `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)})`
+  }, [compareWindowLevel])
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
@@ -141,15 +249,133 @@ export default function ViewerPage() {
     img.src = currentImage.url
   }, [currentImage, zoom, rotation, flipH, flipV, pan, filterStyle])
 
+  const drawCompareCanvas = useCallback(() => {
+    const canvas = compareCanvasRef.current
+    if (!canvas || !compareCurrentImage) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = rect.height * dpr
+    ctx.scale(dpr, dpr)
+
+    const cw = rect.width
+    const ch = rect.height
+    ctx.fillStyle = '#050810'
+    ctx.fillRect(0, 0, cw, ch)
+
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      const scale = Math.min(cw / img.width, ch / img.height) * 0.92
+      const iw = img.width * scale
+      const ih = img.height * scale
+      const ix = (cw - iw) / 2
+      const iy = (ch - ih) / 2
+
+      ctx.save()
+      ctx.translate(cw / 2, ch / 2)
+      ctx.scale(compareZoom, compareZoom)
+      ctx.translate(-cw / 2, -ch / 2)
+      ctx.filter = compareFilterStyle
+      ctx.drawImage(img, ix, iy, iw, ih)
+      ctx.restore()
+
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)'
+      ctx.lineWidth = 1
+      ctx.strokeRect(ix, iy, iw, ih)
+
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.08)'
+      ctx.font = `${Math.min(cw, ch) * 0.15}px sans-serif`
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'top'
+      ctx.fillText('⟲', cw - 12, 12)
+    }
+    img.src = compareCurrentImage.url
+  }, [compareCurrentImage, compareZoom, compareFilterStyle])
+
   useEffect(() => {
     drawCanvas()
   }, [drawCanvas])
 
   useEffect(() => {
-    const handler = () => drawCanvas()
+    if (compareMode) {
+      drawCompareCanvas()
+    }
+  }, [compareMode, drawCompareCanvas])
+
+  useEffect(() => {
+    const handler = () => {
+      drawCanvas()
+      if (compareMode) drawCompareCanvas()
+    }
     window.addEventListener('resize', handler)
     return () => window.removeEventListener('resize', handler)
-  }, [drawCanvas])
+  }, [drawCanvas, drawCompareCanvas, compareMode])
+
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const x = Math.floor(e.clientX - rect.left)
+    const y = Math.floor(e.clientY - rect.top)
+
+    if (activeTool === 'pan') {
+      isPanDraggingRef.current = true
+      panStartRef.current = { x: e.clientX, y: e.clientY }
+      panInitialRef.current = { ...pan }
+      return
+    }
+
+    if (activeTool === 'text') {
+      const text = window.prompt('输入标注文字:')
+      if (text && text.trim()) {
+        annotationIdRef.current += 1
+        addAnnotation({
+          id: `ann_${Date.now()}_${annotationIdRef.current}`,
+          type: 'text',
+          imageId: currentImage?.id ?? '',
+          x, y,
+          text: text.trim(),
+        } as any)
+      }
+      return
+    }
+
+    if (activeTool === 'length' || activeTool === 'area' || activeTool === 'ctvalue' || activeTool === 'arrow') {
+      setDrawingPoints([{ x, y }])
+    } else if (activeTool === 'angle') {
+      setDrawingPoints((prev) => {
+        const next = [...prev, { x, y }]
+        if (next.length === 3) {
+          const [p1, p2, p3] = next
+          const v1x = p1.x - p2.x
+          const v1y = p1.y - p2.y
+          const v2x = p3.x - p2.x
+          const v2y = p3.y - p2.y
+          const dot = v1x * v2x + v1y * v2y
+          const m1 = Math.sqrt(v1x * v1x + v1y * v1y)
+          const m2 = Math.sqrt(v2x * v2x + v2y * v2y)
+          const cos = Math.max(-1, Math.min(1, dot / (m1 * m2)))
+          const deg = (Math.acos(cos) * 180) / Math.PI
+          annotationIdRef.current += 1
+          addAnnotation({
+            id: `ann_${Date.now()}_${annotationIdRef.current}`,
+            type: 'angle',
+            imageId: currentImage?.id ?? '',
+            point1: p1,
+            point2: p2,
+            point3: p3,
+            value: deg,
+          } as any)
+          return []
+        }
+        return next
+      })
+    }
+  }, [activeTool, pan, addAnnotation, currentImage])
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current
@@ -159,7 +385,120 @@ export default function ViewerPage() {
     const y = Math.floor(e.clientY - rect.top)
     const hu = Math.floor(-800 + (x / rect.width) * 2000 - (y / rect.height) * 500)
     setMouseCoord(x, y, hu)
-  }, [setMouseCoord])
+
+    if (activeTool === 'pan' && isPanDraggingRef.current) {
+      const dx = e.clientX - panStartRef.current.x
+      const dy = e.clientY - panStartRef.current.y
+      setPan({
+        x: panInitialRef.current.x + dx,
+        y: panInitialRef.current.y + dy,
+      })
+      return
+    }
+
+    if (activeTool === 'length' || activeTool === 'area' || activeTool === 'ctvalue' || activeTool === 'arrow') {
+      setDrawingPoints((prev) => {
+        if (prev.length === 0) return prev
+        return [prev[0], { x, y }]
+      })
+    } else if (activeTool === 'angle') {
+      setDrawingPoints((prev) => {
+        if (prev.length === 0) return prev
+        return [...prev.slice(0, -1), { x, y }]
+      })
+    }
+  }, [activeTool, setMouseCoord, setPan])
+
+  const handleCanvasMouseUp = useCallback((e: React.MouseEvent) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const x = Math.floor(e.clientX - rect.left)
+    const y = Math.floor(e.clientY - rect.top)
+
+    if (activeTool === 'pan') {
+      isPanDraggingRef.current = false
+      return
+    }
+
+    if (activeTool === 'length' && drawingPoints.length >= 1) {
+      const p0 = drawingPoints[0]
+      const p1 = { x, y }
+      const dist = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2) * 0.5
+      if (dist > 1) {
+        annotationIdRef.current += 1
+        addAnnotation({
+          id: `ann_${Date.now()}_${annotationIdRef.current}`,
+          type: 'length',
+          imageId: currentImage?.id ?? '',
+          startX: p0.x,
+          startY: p0.y,
+          endX: p1.x,
+          endY: p1.y,
+          value: dist,
+          unit: 'mm',
+        } as any)
+      }
+      setDrawingPoints([])
+    } else if (activeTool === 'area' && drawingPoints.length >= 1) {
+      const p0 = drawingPoints[0]
+      const p1 = { x, y }
+      const w = Math.abs(p1.x - p0.x)
+      const h = Math.abs(p1.y - p0.y)
+      if (w > 3 && h > 3) {
+        const area = w * h * 0.5 * 0.5
+        annotationIdRef.current += 1
+        addAnnotation({
+          id: `ann_${Date.now()}_${annotationIdRef.current}`,
+          type: 'area',
+          imageId: currentImage?.id ?? '',
+          points: [p0, p1],
+          value: area,
+          unit: 'mm²',
+        } as any)
+      }
+      setDrawingPoints([])
+    } else if (activeTool === 'ctvalue' && drawingPoints.length >= 1) {
+      const p0 = drawingPoints[0]
+      const p1 = { x, y }
+      const r = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2)
+      if (r > 3) {
+        const meanHu = Math.floor(-800 + (p0.x / rect.width) * 2000)
+        const std = Math.floor(5 + Math.random() * 10)
+        annotationIdRef.current += 1
+        addAnnotation({
+          id: `ann_${Date.now()}_${annotationIdRef.current}`,
+          type: 'ctvalue',
+          imageId: currentImage?.id ?? '',
+          x: p0.x,
+          y: p0.y,
+          endX: p1.x,
+          endY: p1.y,
+          meanHu,
+          std,
+        } as any)
+      }
+      setDrawingPoints([])
+    } else if (activeTool === 'arrow' && drawingPoints.length >= 1) {
+      const p0 = drawingPoints[0]
+      const p1 = { x, y }
+      const dist = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2)
+      if (dist > 5) {
+        annotationIdRef.current += 1
+        addAnnotation({
+          id: `ann_${Date.now()}_${annotationIdRef.current}`,
+          type: 'arrow',
+          imageId: currentImage?.id ?? '',
+          startX: p0.x,
+          startY: p0.y,
+          endX: p1.x,
+          endY: p1.y,
+          label: '',
+        } as any)
+      }
+      setDrawingPoints([])
+    }
+  }, [activeTool, drawingPoints, addAnnotation, currentImage])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
@@ -171,6 +510,17 @@ export default function ViewerPage() {
       else prevImage()
     }
   }, [activeTool, zoom, setZoom, nextImage, prevImage])
+
+  const handleCompareWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    if (syncMode && compareMode) {
+      handleWheel(e)
+      return
+    }
+    const delta = e.deltaY > 0 ? 1 : -1
+    const newIdx = Math.max(0, Math.min(compareDisplayImages.length - 1, compareImageIndex + delta))
+    setCompareImageIndex(newIdx)
+  }, [syncMode, compareMode, compareDisplayImages.length, compareImageIndex, handleWheel])
 
   const getLayoutGridCols = (): string => {
     switch (layout) {
@@ -191,9 +541,17 @@ export default function ViewerPage() {
     >
       <canvas
         ref={idx === 0 ? canvasRef : undefined}
-        className="w-full h-full block cursor-crosshair"
-        onMouseMove={handleCanvasMouseMove}
-        onWheel={handleWheel}
+        className={cn(
+          "w-full h-full block",
+          activeTool === 'text' ? 'cursor-text' :
+          activeTool === 'zoom' ? 'cursor-zoom-in' :
+          activeTool === 'pan' ? 'cursor-grab' :
+          'cursor-crosshair'
+        )}
+        onMouseDown={idx === 0 ? handleCanvasMouseDown : undefined}
+        onMouseMove={idx === 0 ? handleCanvasMouseMove : undefined}
+        onMouseUp={idx === 0 ? handleCanvasMouseUp : undefined}
+        onWheel={idx === 0 ? handleWheel : undefined}
       />
       <div className="absolute top-1 left-2 text-[10px] font-mono text-cyan-400/90 pointer-events-none leading-tight">
         <div>{maskPatientId(study.patientId)}</div>
@@ -216,6 +574,139 @@ export default function ViewerPage() {
           <span className="text-gray-600 text-xs font-mono">TILE {idx + 1}</span>
         </div>
       )}
+    </div>
+  )
+
+  const renderCompareMode = () => (
+    <div className="flex h-full w-full gap-0">
+      <div className="flex-1 relative flex flex-col border-2 rounded-sm overflow-hidden" style={{ borderColor: '#2563EB' }}>
+        <div className="h-7 flex items-center px-3 shrink-0" style={{ backgroundColor: 'rgba(37, 99, 235, 0.2)' }}>
+          <span className="text-[11px] font-medium" style={{ color: '#60A5FA' }}>主片 当前检查</span>
+          {syncMode && (
+            <span className="ml-2 px-1.5 py-0.5 text-[9px] rounded bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-medium">已同步</span>
+          )}
+        </div>
+        <div className="flex-1 relative bg-black overflow-hidden">
+          <div className="absolute top-2 left-2 w-6 h-6 rounded-full flex items-center justify-center z-10 text-[9px] font-bold text-white shadow-lg" style={{ backgroundColor: '#2563EB' }}>
+            CURRENT
+          </div>
+          <canvas
+            ref={canvasRef}
+            className={cn(
+              "w-full h-full block",
+              activeTool === 'text' ? 'cursor-text' :
+              activeTool === 'zoom' ? 'cursor-zoom-in' :
+              activeTool === 'pan' ? 'cursor-grab' :
+              'cursor-crosshair'
+            )}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onWheel={handleWheel}
+          />
+          <div className="absolute top-1 left-10 text-[10px] font-mono text-cyan-400/90 pointer-events-none leading-tight">
+            <div>{maskPatientId(study.patientId)}</div>
+            <div>{study.accessionNumber ?? ''}</div>
+          </div>
+          <div className="absolute top-1 right-2 text-[10px] font-mono text-cyan-400/90 text-right pointer-events-none leading-tight">
+            <div>{activeSeries?.description ?? ''}</div>
+            <div>{activeSeries?.modality ?? ''}</div>
+          </div>
+          <div className="absolute bottom-1 left-2 text-[10px] font-mono text-cyan-400/90 pointer-events-none leading-tight">
+            <div>Img {Math.min(activeImageIndex + 1, activeSeries?.instancesCount ?? 1)}/{activeSeries?.instancesCount ?? 1}</div>
+            <div>ST 5.0mm</div>
+          </div>
+          <div className="absolute bottom-1 right-2 text-[10px] font-mono text-cyan-400/90 text-right pointer-events-none leading-tight">
+            <div>1 cm</div>
+            <div>×{zoom.toFixed(2)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="w-px shrink-0 bg-viewer-border" />
+
+      <div className="flex-1 relative flex flex-col border-2 rounded-sm overflow-hidden" style={{ borderColor: '#F59E0B' }}>
+        <div className="h-7 flex items-center px-3 shrink-0" style={{ backgroundColor: 'rgba(245, 158, 11, 0.2)' }}>
+          <span className="text-[11px] font-medium" style={{ color: '#FBBF24' }}>对照片 历史检查</span>
+          {syncMode && (
+            <span className="ml-2 px-1.5 py-0.5 text-[9px] rounded bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-medium">已同步</span>
+          )}
+          <div className="ml-auto flex items-center gap-1">
+            <History className="w-3 h-3" style={{ color: '#F59E0B' }} />
+            <select
+              value={compareStudyId}
+              onChange={(e) => {
+                setCompareStudyId(e.target.value)
+                setCompareSeriesIndex(0)
+                setCompareImageIndex(0)
+              }}
+              className="text-[10px] bg-viewer-bg border border-viewer-border rounded px-1.5 py-0.5 text-gray-300 outline-none cursor-pointer"
+            >
+              {availableCompareStudies.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {maskPatientName(s.patientName)}-{s.bodyPart}-{s.studyDate}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="flex-1 relative bg-black overflow-hidden">
+          <div className="absolute top-2 left-2 w-6 h-6 rounded-full flex items-center justify-center z-10 text-[9px] font-bold text-white shadow-lg" style={{ backgroundColor: '#F59E0B' }}>
+            HISTORY
+          </div>
+          <canvas
+            ref={compareCanvasRef}
+            className="w-full h-full block cursor-crosshair"
+            onWheel={handleCompareWheel}
+          />
+          <div className="absolute top-1 left-10 text-[10px] font-mono pointer-events-none leading-tight" style={{ color: '#FBBF24' }}>
+            <div>{maskPatientId(compareStudy.patientId)}</div>
+            <div>{compareStudy.accessionNumber ?? ''}</div>
+          </div>
+          <div className="absolute top-1 right-2 text-[10px] font-mono text-right pointer-events-none leading-tight" style={{ color: '#FBBF24' }}>
+            <div>{compareActiveSeries?.description ?? ''}</div>
+            <div>{compareActiveSeries?.modality ?? ''}</div>
+          </div>
+          <div className="absolute bottom-1 left-2 text-[10px] font-mono pointer-events-none leading-tight" style={{ color: '#FBBF24' }}>
+            <div>Img {Math.min(compareImageIndex + 1, compareActiveSeries?.instancesCount ?? 1)}/{compareActiveSeries?.instancesCount ?? 1}</div>
+            <div>ST 5.0mm</div>
+          </div>
+          <div className="absolute bottom-1 right-2 text-[10px] font-mono text-right pointer-events-none leading-tight" style={{ color: '#FBBF24' }}>
+            <div>2025-03-15 复查</div>
+            <div>×{compareZoom.toFixed(2)}</div>
+          </div>
+        </div>
+        {!syncMode && (
+          <div className="h-8 px-2 flex items-center gap-2 shrink-0 border-t border-viewer-border bg-viewer-panel/60">
+            <div className="flex items-center gap-1 text-[10px]">
+              <span className="text-gray-500 w-6">WW:</span>
+              <input
+                type="range"
+                min={100}
+                max={3000}
+                value={compareWindowLevel.width}
+                onChange={(e) => setCompareWindowLevel({ ...compareWindowLevel, width: parseInt(e.target.value) })}
+                className="w-16 h-1 bg-viewer-border rounded appearance-none"
+                style={{ accentColor: '#F59E0B' }}
+              />
+              <span className="font-mono w-10 text-right" style={{ color: '#FBBF24' }}>{compareWindowLevel.width}</span>
+            </div>
+            <div className="flex items-center gap-1 text-[10px]">
+              <span className="text-gray-500 w-6">WL:</span>
+              <input
+                type="range"
+                min={-1000}
+                max={1000}
+                value={compareWindowLevel.center}
+                onChange={(e) => setCompareWindowLevel({ ...compareWindowLevel, center: parseInt(e.target.value) })}
+                className="w-16 h-1 bg-viewer-border rounded appearance-none"
+                style={{ accentColor: '#F59E0B' }}
+              />
+              <span className="font-mono w-10 text-right" style={{ color: '#FBBF24' }}>{compareWindowLevel.center}</span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 
@@ -505,11 +996,13 @@ export default function ViewerPage() {
               <button
                 key={l.value}
                 onClick={() => setLayout(l.value)}
+                disabled={compareMode}
                 className={cn(
                   "px-2.5 py-1 text-[11px] rounded-md border transition-colors",
                   layout === l.value
                     ? "bg-medical-600 border-medical-500 text-white"
-                    : "bg-viewer-bg border-viewer-border text-gray-400 hover:border-gray-600 hover:text-gray-200"
+                    : "bg-viewer-bg border-viewer-border text-gray-400 hover:border-gray-600 hover:text-gray-200",
+                  compareMode && "opacity-50 cursor-not-allowed hover:border-viewer-border hover:text-gray-400"
                 )}
               >
                 {l.label}
@@ -521,9 +1014,11 @@ export default function ViewerPage() {
           </div>
 
           <div ref={containerRef} className="flex-1 p-2 overflow-hidden">
-            <div className={cn('grid gap-1 h-full w-full', getLayoutGridCols())}>
-              {Array.from({ length: tileCount }).map((_, idx) => renderCanvasTile(idx))}
-            </div>
+            {compareMode ? renderCompareMode() : (
+              <div className={cn('grid gap-1 h-full w-full', getLayoutGridCols())}>
+                {Array.from({ length: tileCount }).map((_, idx) => renderCanvasTile(idx))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -661,12 +1156,8 @@ export default function ViewerPage() {
         <div className="ml-auto flex items-center gap-2">
           <span className="text-gray-500">缩放:</span>
           <span className="text-green-400">{(zoom * 100).toFixed(0)}%</span>
-          {annotations.length > 0 && (
-            <>
-              <span className="text-gray-600">|</span>
-              <span className="text-purple-400">标注: {annotations.length}</span>
-            </>
-          )}
+          <span className="text-gray-600">|</span>
+          <span className="text-purple-400">标注: {annotations.length}</span>
           {compareMode && (
             <>
               <span className="text-gray-600">|</span>

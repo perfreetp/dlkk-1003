@@ -29,6 +29,9 @@ import {
   ListChecks,
   Layers,
   Settings as SettingsIcon,
+  Check,
+  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
@@ -75,6 +78,58 @@ const ARCHIVE_STATUS = [
   { value: 'offline', label: '离线' },
 ];
 
+type ShareLink = {
+  id: string;
+  patient: string;
+  accession: string;
+  modality: string;
+  expireDays: number;
+  remainingDays: number;
+  permission: 'view' | 'download';
+  password: string;
+  visits: number;
+  createdAt: string;
+  link: string;
+};
+
+type Toast = {
+  id: number;
+  type: 'success' | 'warning' | 'error';
+  message: string;
+};
+
+const initialLinks: ShareLink[] = [
+  { id: 'SL001', patient: '王建国', accession: 'ACC20250609001', modality: '胸部CT', expireDays: 7, remainingDays: 5, permission: 'view', password: 'KJ82XQ', visits: 12, createdAt: '2025-06-08 14:30', link: 'https://pacs.example.com/s/ab12cd34' },
+  { id: 'SL002', patient: '刘美华', accession: 'ACC20250609002', modality: '头部MR', expireDays: 3, remainingDays: 2, permission: 'download', password: 'MN45PW', visits: 5, createdAt: '2025-06-09 09:15', link: 'https://pacs.example.com/s/ef56gh78' },
+  { id: 'SL003', patient: '陈志强', accession: 'ACC20250609003', modality: '腹部CT', expireDays: 30, remainingDays: 28, permission: 'view', password: 'RS67YZ', visits: 23, createdAt: '2025-06-07 16:45', link: 'https://pacs.example.com/s/ij90kl12' },
+  { id: 'SL004', patient: '赵晓燕', accession: 'ACC20250609004', modality: '膝关节DR', expireDays: 14, remainingDays: 1, permission: 'download', password: 'TU89AB', visits: 8, createdAt: '2025-06-05 11:20', link: 'https://pacs.example.com/s/mn34op56' },
+  { id: 'SL005', patient: '孙文博', accession: 'ACC20250609005', modality: '脊柱MR', expireDays: 7, remainingDays: 6, permission: 'view', password: 'CD12EF', visits: 3, createdAt: '2025-06-09 08:00', link: 'https://pacs.example.com/s/qr78st90' },
+  { id: 'SL006', patient: '李雅琴', accession: 'ACC20250609006', modality: '胸部DR', expireDays: 15, remainingDays: 10, permission: 'download', password: 'UV34WX', visits: 15, createdAt: '2025-06-06 10:30', link: 'https://pacs.example.com/s/yz12ab34' },
+];
+
+const generatePassword = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
+
+const generateRandomId = (len: number) => {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < len; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
+
+const formatDateTime = (d: Date) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 export default function ArchivePage() {
   const [tab, setTab] = useState('export');
   const [searchText, setSearchText] = useState('');
@@ -84,6 +139,17 @@ export default function ArchivePage() {
   const [compress, setCompress] = useState('zip');
   const [quality, setQuality] = useState(85);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareLinks, setShareLinks] = useState<ShareLink[]>(initialLinks);
+  const [selectedStudyId, setSelectedStudyId] = useState(studies[0]?.id || '');
+  const [expireDays, setExpireDays] = useState(7);
+  const [permission, setPermission] = useState<'view' | 'download'>('view');
+  const [sharePassword, setSharePassword] = useState(generatePassword());
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
+  const [copiedPasswordId, setCopiedPasswordId] = useState<string | null>(null);
+  const [renewModalOpen, setRenewModalOpen] = useState(false);
+  const [renewTargetId, setRenewTargetId] = useState<string | null>(null);
+  const [renewDays, setRenewDays] = useState(7);
 
   const toggleStudy = (id: string) => {
     setSelectedStudies((prev) =>
@@ -106,14 +172,101 @@ export default function ArchivePage() {
     { id: 4, name: 'DR影像批量导出.zip', size: '412MB', progress: 35, status: 'processing', time: '进行中' },
   ];
 
-  const shareLinks = [
-    { id: 'SL001', patient: '王建国', accession: 'ACC20250609001', modality: '胸部CT', expireDays: 7, remainingDays: 5, permission: 'view', password: 'KJ82XQ', visits: 12, createdAt: '2025-06-08 14:30', link: 'https://pacs.example.com/s/ab12cd34' },
-    { id: 'SL002', patient: '刘美华', accession: 'ACC20250609002', modality: '头部MR', expireDays: 3, remainingDays: 2, permission: 'download', password: 'MN45PW', visits: 5, createdAt: '2025-06-09 09:15', link: 'https://pacs.example.com/s/ef56gh78' },
-    { id: 'SL003', patient: '陈志强', accession: 'ACC20250609003', modality: '腹部CT', expireDays: 30, remainingDays: 28, permission: 'view', password: 'RS67YZ', visits: 23, createdAt: '2025-06-07 16:45', link: 'https://pacs.example.com/s/ij90kl12' },
-    { id: 'SL004', patient: '赵晓燕', accession: 'ACC20250609004', modality: '膝关节DR', expireDays: 14, remainingDays: 1, permission: 'download', password: 'TU89AB', visits: 8, createdAt: '2025-06-05 11:20', link: 'https://pacs.example.com/s/mn34op56' },
-    { id: 'SL005', patient: '孙文博', accession: 'ACC20250609005', modality: '脊柱MR', expireDays: 7, remainingDays: 6, permission: 'view', password: 'CD12EF', visits: 3, createdAt: '2025-06-09 08:00', link: 'https://pacs.example.com/s/qr78st90' },
-    { id: 'SL006', patient: '李雅琴', accession: 'ACC20250609006', modality: '胸部DR', expireDays: 15, remainingDays: 10, permission: 'download', password: 'UV34WX', visits: 15, createdAt: '2025-06-06 10:30', link: 'https://pacs.example.com/s/yz12ab34' },
-  ];
+  const addToast = (type: Toast['type'], message: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3000);
+  };
+
+  const handleGenerateShare = () => {
+    const study = studies.find((s) => s.id === selectedStudyId);
+    if (!study) {
+      addToast('error', '未找到对应检查');
+      return;
+    }
+    const newLink: ShareLink = {
+      id: `SL${Date.now()}`,
+      patient: study.patientName,
+      accession: study.accessionNumber || '',
+      modality: `${study.modality} ${study.bodyPart}`,
+      expireDays: expireDays,
+      remainingDays: expireDays,
+      permission: permission,
+      password: sharePassword,
+      visits: 0,
+      createdAt: formatDateTime(new Date()),
+      link: `https://pacs.example.com/s/${generateRandomId(8)}`,
+    };
+    setShareLinks((prev) => [newLink, ...prev]);
+    setShareModalOpen(false);
+    addToast('success', '分享链接已生成');
+    setSharePassword(generatePassword());
+  };
+
+  const openShareModal = () => {
+    setSelectedStudyId(studies[0]?.id || '');
+    setExpireDays(7);
+    setPermission('view');
+    setSharePassword(generatePassword());
+    setShareModalOpen(true);
+  };
+
+  const handleCopyLink = async (link: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedLinkId(id);
+      addToast('success', '链接已复制到剪贴板');
+      setTimeout(() => setCopiedLinkId(null), 1500);
+    } catch {
+      addToast('error', '复制失败');
+    }
+  };
+
+  const handleCopyPassword = async (password: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(password);
+      setCopiedPasswordId(id);
+      setTimeout(() => setCopiedPasswordId(null), 1500);
+    } catch {
+      addToast('error', '复制失败');
+    }
+  };
+
+  const openRenewModal = (id: string) => {
+    setRenewTargetId(id);
+    setRenewDays(7);
+    setRenewModalOpen(true);
+  };
+
+  const handleConfirmRenew = () => {
+    if (!renewTargetId) return;
+    setShareLinks((prev) =>
+      prev.map((s) =>
+        s.id === renewTargetId
+          ? { ...s, remainingDays: s.remainingDays + renewDays, expireDays: s.expireDays + renewDays }
+          : s
+      )
+    );
+    const target = shareLinks.find((s) => s.id === renewTargetId);
+    const remaining = target ? target.remainingDays + renewDays : 0;
+    addToast('success', `已续期 ${renewDays} 天，当前剩余 ${remaining} 天`);
+    setRenewModalOpen(false);
+    setRenewTargetId(null);
+  };
+
+  const handleRevoke = (id: string) => {
+    if (!window.confirm('确认撤销该分享链接？撤销后链接将不再可访问。')) return;
+    setShareLinks((prev) => prev.filter((s) => s.id !== id));
+    addToast('warning', '链接已撤销，不再可访问');
+  };
+
+  const handleSimulateVisit = (id: string) => {
+    setShareLinks((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, visits: s.visits + 1 } : s))
+    );
+  };
 
   const archiveRecords = Array.from({ length: 12 }, (_, i) => {
     const study = studies[i % studies.length];
@@ -446,7 +599,7 @@ export default function ArchivePage() {
                   { value: 'download', label: '可下载' },
                 ]} value="all" onChange={() => {}} className="w-32" />
               </div>
-              <Button onClick={() => setShareModalOpen(true)} className="h-10">
+              <Button onClick={openShareModal} className="h-10">
                 <Plus className="w-4 h-4 mr-1.5" />生成分享链接
               </Button>
             </div>
@@ -503,8 +656,11 @@ export default function ArchivePage() {
                           </div>
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-mono font-bold text-slate-900 tracking-wider">{s.password}</span>
-                            <button className="p-1 rounded hover:bg-slate-200 transition-colors text-slate-500 hover:text-blue-600">
-                              <Copy className="w-3.5 h-3.5" />
+                            <button onClick={() => handleCopyPassword(s.password, s.id)} className={cn(
+                              "p-1 rounded transition-colors",
+                              copiedPasswordId === s.id ? "bg-emerald-100 text-emerald-600" : "hover:bg-slate-200 text-slate-500 hover:text-blue-600"
+                            )}>
+                              {copiedPasswordId === s.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                             </button>
                           </div>
                         </div>
@@ -521,17 +677,31 @@ export default function ArchivePage() {
                         <div className="flex items-center gap-1 text-xs text-slate-500 shrink-0 ml-2">
                           <Eye className="w-3 h-3" />
                           <span className="font-mono font-semibold">{s.visits}</span>
+                          <button onClick={() => handleSimulateVisit(s.id)} className="ml-1 p-0.5 rounded hover:bg-slate-200 hover:text-blue-600 transition-colors">
+                            <Plus className="w-3 h-3" />
+                          </button>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-1.5 pt-1">
-                        <Button variant="ghost" size="sm" className="flex-1 h-8">
-                          <Copy className="w-3.5 h-3.5 mr-1" />复制
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleCopyLink(s.link, s.id)}
+                          className={cn(
+                            "flex-1 h-8",
+                            copiedLinkId === s.id && "bg-emerald-50 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-700"
+                          )}>
+                          {copiedLinkId === s.id ? (
+                            <><Check className="w-3.5 h-3.5 mr-1" />已复制</>
+                          ) : (
+                            <><Copy className="w-3.5 h-3.5 mr-1" />复制</>
+                          )}
                         </Button>
-                        <Button variant="ghost" size="sm" className="flex-1 h-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50">
+                        <Button variant="ghost" size="sm" onClick={() => openRenewModal(s.id)} className="flex-1 h-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50">
                           <RefreshCw className="w-3.5 h-3.5 mr-1" />续期
                         </Button>
-                        <Button variant="ghost" size="sm" className="flex-1 h-8 text-red-600 hover:text-red-700 hover:bg-red-50">
+                        <Button variant="ghost" size="sm" onClick={() => handleRevoke(s.id)} className="flex-1 h-8 text-red-600 hover:text-red-700 hover:bg-red-50">
                           <X className="w-3.5 h-3.5 mr-1" />撤销
                         </Button>
                       </div>
@@ -546,16 +716,20 @@ export default function ArchivePage() {
               footer={
                 <>
                   <Button variant="secondary" onClick={() => setShareModalOpen(false)}>取消</Button>
-                  <Button onClick={() => setShareModalOpen(false)}>确认生成</Button>
+                  <Button onClick={handleGenerateShare}>确认生成</Button>
                 </>
               }>
               <div className="space-y-4">
                 <div>
                   <label className="text-xs font-semibold text-slate-600 mb-1.5 block">选择检查</label>
-                  <Select options={[
-                    { value: '1', label: '王建国 - 胸部CT ACC20250609001' },
-                    { value: '2', label: '刘美华 - 头部MR ACC20250609002' },
-                  ]} value="1" onChange={() => {}} />
+                  <Select
+                    options={studies.map((s) => ({
+                      value: s.id,
+                      label: `${s.patientName} - ${s.modality} ${s.bodyPart} ${s.accessionNumber || ''}`,
+                    }))}
+                    value={selectedStudyId}
+                    onChange={setSelectedStudyId}
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-slate-600 mb-1.5 block">有效期限</label>
@@ -565,19 +739,33 @@ export default function ArchivePage() {
                     { value: '7', label: '7 天' },
                     { value: '14', label: '14 天' },
                     { value: '30', label: '30 天' },
-                  ]} value="7" onChange={() => {}} />
+                  ]} value={String(expireDays)} onChange={(v) => setExpireDays(Number(v))} />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-slate-600 mb-2 block">访问权限</label>
                   <div className="grid grid-cols-2 gap-2">
-                    <button className="flex items-center gap-2 p-3 rounded-lg border-2 border-blue-500 bg-blue-50 text-blue-700">
+                    <button
+                      onClick={() => setPermission('view')}
+                      className={cn(
+                        "flex items-center gap-2 p-3 rounded-lg border-2 transition-all",
+                        permission === 'view'
+                          ? "border-blue-500 bg-blue-50 text-blue-700"
+                          : "border-slate-200 hover:border-slate-300 text-slate-600"
+                      )}>
                       <Eye className="w-4 h-4" />
                       <div className="text-left">
                         <div className="text-sm font-semibold">仅查看</div>
                         <div className="text-[11px] opacity-80">只读访问影像</div>
                       </div>
                     </button>
-                    <button className="flex items-center gap-2 p-3 rounded-lg border-2 border-slate-200 hover:border-slate-300 text-slate-600">
+                    <button
+                      onClick={() => setPermission('download')}
+                      className={cn(
+                        "flex items-center gap-2 p-3 rounded-lg border-2 transition-all",
+                        permission === 'download'
+                          ? "border-blue-500 bg-blue-50 text-blue-700"
+                          : "border-slate-200 hover:border-slate-300 text-slate-600"
+                      )}>
                       <Unlock className="w-4 h-4" />
                       <div className="text-left">
                         <div className="text-sm font-semibold">可下载</div>
@@ -591,9 +779,42 @@ export default function ArchivePage() {
                     <Shield className="w-3.5 h-3.5" />访问密码
                   </label>
                   <div className="flex gap-2">
-                    <Input value="KJ82XQ" className="font-mono tracking-wider" />
-                    <Button variant="secondary"><RefreshCw className="w-4 h-4" /></Button>
+                    <Input value={sharePassword} readOnly className="font-mono tracking-wider" />
+                    <Button variant="secondary" onClick={() => setSharePassword(generatePassword())}><RefreshCw className="w-4 h-4" /></Button>
                   </div>
+                </div>
+              </div>
+            </Modal>
+
+            <Modal open={renewModalOpen} onClose={() => { setRenewModalOpen(false); setRenewTargetId(null); }} title="续期分享链接"
+              className="max-w-sm"
+              footer={
+                <>
+                  <Button variant="secondary" onClick={() => { setRenewModalOpen(false); setRenewTargetId(null); }}>取消</Button>
+                  <Button onClick={handleConfirmRenew}>确认续期</Button>
+                </>
+              }>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-2 block">选择续期天数</label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[3, 7, 14, 30].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => setRenewDays(d)}
+                        className={cn(
+                          "py-2.5 rounded-lg text-sm font-semibold border-2 transition-all",
+                          renewDays === d
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:bg-blue-50/40"
+                        )}>
+                        {d} 天
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-100 text-xs text-slate-600">
+                  续期后将在原有效期基础上延长 <b className="text-blue-700">{renewDays}</b> 天。
                 </div>
               </div>
             </Modal>
@@ -752,6 +973,50 @@ export default function ArchivePage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 w-80">
+        {toasts.map((t) => {
+          const Icon = t.type === 'success' ? CheckCircle : t.type === 'warning' ? AlertTriangle : AlertCircle;
+          const colors = t.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : t.type === 'warning'
+            ? 'bg-amber-50 border-amber-200 text-amber-800'
+            : 'bg-red-50 border-red-200 text-red-800';
+          const iconColor = t.type === 'success' ? 'text-emerald-500' : t.type === 'warning' ? 'text-amber-500' : 'text-red-500';
+          return (
+            <div
+              key={t.id}
+              className={cn(
+                'flex items-start gap-2.5 px-4 py-3 rounded-xl border shadow-lg backdrop-blur-sm',
+                colors
+              )}
+              style={{
+                animation: 'slideInRight 0.3s ease-out',
+              }}>
+              <Icon className={cn('w-4.5 h-4.5 shrink-0 mt-0.5', iconColor)} />
+              <span className="text-sm font-medium flex-1 leading-relaxed">{t.message}</span>
+              <button
+                onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+                className="shrink-0 opacity-60 hover:opacity-100 transition-opacity">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      <style>{`
+        @keyframes slideInRight {
+          from {
+            opacity: 0;
+            transform: translateX(100%);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+      `}</style>
     </div>
   );
 }

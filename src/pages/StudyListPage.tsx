@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Search,
   Plus,
@@ -72,6 +73,7 @@ interface SortState {
 }
 
 export default function StudyListPage() {
+  const navigate = useNavigate();
   const { studies, setFilters, updateStudyStatus } = useStudyStore();
 
   const [searchText, setSearchText] = useState('');
@@ -191,11 +193,12 @@ export default function StudyListPage() {
 
   const handleView = (id: string) => {
     updateStudyStatus(id, 'reporting');
-    openDrawer(studies.find((s) => s.id === id)!);
+    navigate(`/viewer/${id}`);
   };
 
   const handleReport = (id: string) => {
-    updateStudyStatus(id, 'reported');
+    updateStudyStatus(id, 'reporting');
+    navigate(`/report/${id}`);
   };
 
   const ModalityBadge = ({ modality }: { modality: Modality }) => {
@@ -520,7 +523,10 @@ export default function StudyListPage() {
                   paginatedStudies.map((study, idx) => (
                     <tr
                       key={study.id}
-                      className="hover:bg-medical-50/50 dark:hover:bg-medical-900/10 transition-colors group"
+                      className={cn(
+                        "hover:bg-medical-50/50 dark:hover:bg-medical-900/10 transition-colors group",
+                        selectedStudyId === study.id && "bg-medical-100/50 dark:bg-medical-900/20"
+                      )}
                     >
                       <td className="py-4 px-4 text-sm text-slate-500 font-mono">
                         {(currentPage - 1) * pageSize + idx + 1}
