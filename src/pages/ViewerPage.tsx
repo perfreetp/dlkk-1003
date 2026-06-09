@@ -59,7 +59,7 @@ export default function ViewerPage() {
 
   const perStudy = useViewerStore(s => s.activeStudyId ? s.viewerByStudy[s.activeStudyId] : null)
 
-  const _activeSeriesId = perStudy?.activeSeriesId ?? null
+  const activeSeriesId = perStudy?.activeSeriesId ?? (seriesList[0]?.id || '')
   const activeImageIndex = perStudy?.activeImageIndex ?? 0
   const zoom = perStudy?.zoom ?? 1
   const rotation = perStudy?.rotation ?? 0
@@ -70,9 +70,6 @@ export default function ViewerPage() {
   const annotations = perStudy?.annotations ?? []
   const expandedSeries = perStudy?.expandedSeries ?? new Set<string>()
 
-  const [effectiveSeriesId, setEffectiveSeriesId] = useState<string>(
-    seriesList[0]?.id ?? ''
-  )
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const autoPlayRef = useRef<number | null>(null)
@@ -115,8 +112,6 @@ export default function ViewerPage() {
     return mockStudies.filter((s) => s.id !== study.id)
   }, [study.id])
 
-  const activeSeriesId = _activeSeriesId ?? effectiveSeriesId
-
   const mainSeriesIndex = useMemo(() => {
     const id = activeSeriesId
     const idx = seriesList.findIndex((s) => s.id === id)
@@ -152,17 +147,12 @@ export default function ViewerPage() {
 
   useEffect(() => {
     if (seriesList.length > 0 && activeStudyId) {
-      const firstSeriesId = seriesList[0].id
-      if (!_activeSeriesId && !effectiveSeriesId) {
-        setActiveSeries(firstSeriesId)
-        setEffectiveSeriesId(firstSeriesId)
-      } else if (!_activeSeriesId && effectiveSeriesId) {
-        setActiveSeries(effectiveSeriesId)
-      } else if (_activeSeriesId && _activeSeriesId !== effectiveSeriesId) {
-        setEffectiveSeriesId(_activeSeriesId)
+      const storedId = perStudy?.activeSeriesId
+      if (!storedId) {
+        setActiveSeries(seriesList[0].id)
       }
     }
-  }, [seriesList, activeStudyId, _activeSeriesId, effectiveSeriesId, setActiveSeries])
+  }, [seriesList, activeStudyId, perStudy?.activeSeriesId, setActiveSeries])
 
   useEffect(() => {
     if (!compareMode || !syncMode) return
@@ -214,7 +204,6 @@ export default function ViewerPage() {
 
   const handleSelectSeries = useCallback((series: Series) => {
     setActiveSeries(series.id)
-    setEffectiveSeriesId(series.id)
   }, [setActiveSeries])
 
   const filterStyle = useMemo(() => {
@@ -233,20 +222,10 @@ export default function ViewerPage() {
 
   const drawAnnotations = useCallback((ctx: CanvasRenderingContext2D, cw: number, ch: number) => {
     const allToDraw: Annotation[] = [...annotations]
+    const previewDash: Array<{ id: string; isPreview: boolean }> = []
+
     if (drawingPoints.length > 0) {
-      if (activeTool === 'angle' && drawingPoints.length === 1) {
-        allToDraw.push({
-          id: '_preview',
-          type: 'length',
-          imageId: currentImage?.id ?? '',
-          startX: drawingPoints[0].x,
-          startY: drawingPoints[0].y,
-          endX: drawingPoints[0].x,
-          endY: drawingPoints[0].y,
-          value: 0,
-          unit: 'mm',
-        } as any)
-      } else if (activeTool === 'length' || activeTool === 'area' || activeTool === 'ctvalue' || activeTool === 'arrow') {
+      if (activeTool === 'length' || activeTool === 'area' || activeTool === 'ctvalue' || activeTool === 'arrow') {
         if (drawingPoints.length >= 2) {
           const p0 = drawingPoints[0]
           const p1 = drawingPoints[1]
@@ -262,6 +241,7 @@ export default function ViewerPage() {
               value: 0,
               unit: 'mm',
             } as any)
+            previewDash.push({ id: '_preview', isPreview: true })
           } else if (activeTool === 'area') {
             allToDraw.push({
               id: '_preview',
@@ -271,6 +251,7 @@ export default function ViewerPage() {
               value: 0,
               unit: 'mm²',
             } as any)
+            previewDash.push({ id: '_preview', isPreview: true })
           } else if (activeTool === 'ctvalue') {
             allToDraw.push({
               id: '_preview',
@@ -283,6 +264,7 @@ export default function ViewerPage() {
               meanHu: 0,
               std: 0,
             } as any)
+            previewDash.push({ id: '_preview', isPreview: true })
           } else if (activeTool === 'arrow') {
             allToDraw.push({
               id: '_preview',
@@ -294,6 +276,7 @@ export default function ViewerPage() {
               endY: p1.y,
               label: '',
             } as any)
+            previewDash.push({ id: '_preview', isPreview: true })
           }
         }
       } else if (activeTool === 'angle') {
@@ -301,8 +284,9 @@ export default function ViewerPage() {
         for (let i = 0; i < pts.length - 1; i++) {
           const p0 = pts[i]
           const p1 = pts[i + 1]
+          const segId = `_preview_${i}`
           allToDraw.push({
-            id: `_preview_${i}`,
+            id: segId,
             type: 'length',
             imageId: currentImage?.id ?? '',
             startX: p0.x,
@@ -312,28 +296,38 @@ export default function ViewerPage() {
             value: 0,
             unit: '',
           } as any)
+          const isLastSeg = i === pts.length - 2
+          previewDash.push({ id: segId, isPreview: isLastSeg })
         }
       }
     }
+
+    const isPreviewId = (id: string) => previewDash.find(p => p.id === id)?.isPreview ?? false
 
     for (const ann of allToDraw) {
       ctx.save()
       ctx.strokeStyle = '#22D3EE'
       ctx.fillStyle = '#22D3EE'
       ctx.lineWidth = 1.5
-      ctx.font = '11px monospace'
+      const fontSize = Math.max(8, Math.min(14, 11 / Math.max(0.5, zoom)))
+      ctx.font = `${fontSize}px monospace`
 
       if (ann.type === 'length') {
         const a = ann as any
+        const isPrev = ann.id.startsWith('_preview')
+        if (isPreviewId(ann.id)) {
+          ctx.setLineDash([3, 3])
+        }
         ctx.beginPath()
         ctx.moveTo(a.startX, a.startY)
         ctx.lineTo(a.endX, a.endY)
         ctx.stroke()
+        ctx.setLineDash([])
         ctx.beginPath()
-        ctx.arc(a.startX, a.startY, 3, 0, Math.PI * 2)
+        ctx.arc(a.startX, a.startY, 3 / Math.max(0.5, zoom), 0, Math.PI * 2)
         ctx.fill()
         ctx.beginPath()
-        ctx.arc(a.endX, a.endY, 3, 0, Math.PI * 2)
+        ctx.arc(a.endX, a.endY, 3 / Math.max(0.5, zoom), 0, Math.PI * 2)
         ctx.fill()
         if (a.value && a.value > 0) {
           const mx = (a.startX + a.endX) / 2
@@ -341,7 +335,8 @@ export default function ViewerPage() {
           ctx.fillStyle = '#0F172A'
           const txt = `${a.value.toFixed(1)} ${a.unit || ''}`
           const tw = ctx.measureText(txt).width + 6
-          ctx.fillRect(mx - tw / 2, my - 7, tw, 14)
+          const th = fontSize + 6
+          ctx.fillRect(mx - tw / 2, my - th / 2, tw, th)
           ctx.fillStyle = '#22D3EE'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
@@ -357,18 +352,19 @@ export default function ViewerPage() {
         ctx.stroke()
         for (const p of pts) {
           ctx.beginPath()
-          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2)
+          ctx.arc(p.x, p.y, 3 / Math.max(0.5, zoom), 0, Math.PI * 2)
           ctx.fill()
         }
         if (typeof a.value !== undefined) {
           ctx.fillStyle = '#0F172A'
           const txt = `${a.value.toFixed(1)}°`
           const tw = ctx.measureText(txt).width + 6
-          ctx.fillRect(a.point2.x - tw / 2, a.point2.y - 20, tw, 14)
+          const th = fontSize + 6
+          ctx.fillRect(a.point2.x - tw / 2, a.point2.y - 20 / Math.max(0.5, zoom) - th / 2, tw, th)
           ctx.fillStyle = '#22D3EE'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
-          ctx.fillText(txt, a.point2.x, a.point2.y - 13)
+          ctx.fillText(txt, a.point2.x, a.point2.y - 20 / Math.max(0.5, zoom))
         }
       } else if (ann.type === 'area') {
         const a = ann as any
@@ -379,18 +375,23 @@ export default function ViewerPage() {
         const y = Math.min(p0.y, p1.y)
         const w = Math.abs(p1.x - p0.x)
         const h = Math.abs(p1.y - p0.y)
-        ctx.setLineDash([4, 2])
+        if (isPreviewId(ann.id)) {
+          ctx.setLineDash([3, 3])
+        } else {
+          ctx.setLineDash([4, 2])
+        }
         ctx.strokeRect(x, y, w, h)
         ctx.setLineDash([])
         if (a.value && a.value > 0) {
           ctx.fillStyle = '#0F172A'
           const txt = `${a.value.toFixed(1)} ${a.unit || ''}`
           const tw = ctx.measureText(txt).width + 6
-          ctx.fillRect(x + w / 2 - tw / 2, y - 16, tw, 14)
+          const th = fontSize + 6
+          ctx.fillRect(x + w / 2 - tw / 2, y - 16 / Math.max(0.5, zoom) - th, tw, th)
           ctx.fillStyle = '#22D3EE'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
-          ctx.fillText(txt, x + w / 2, y - 9)
+          ctx.fillText(txt, x + w / 2, y - 16 / Math.max(0.5, zoom) - th / 2)
         }
       } else if (ann.type === 'ctvalue') {
         const a = ann as any
@@ -400,7 +401,11 @@ export default function ViewerPage() {
         if (r > 0) {
           ctx.beginPath()
           ctx.arc(cx, cy, r, 0, Math.PI * 2)
-          ctx.setLineDash([3, 2])
+          if (isPreviewId(ann.id)) {
+            ctx.setLineDash([3, 3])
+          } else {
+            ctx.setLineDash([3, 2])
+          }
           ctx.stroke()
           ctx.setLineDash([])
           ctx.beginPath()
@@ -413,29 +418,34 @@ export default function ViewerPage() {
             ctx.fillStyle = '#0F172A'
             const txt = `Mean: ${a.meanHu} HU`
             const tw = ctx.measureText(txt).width + 6
-            ctx.fillRect(cx + r + 4, cy - 14, tw, 14)
+            const th = fontSize + 6
+            ctx.fillRect(cx + r + 4, cy - th - 2, tw, th)
             ctx.fillStyle = '#22D3EE'
             ctx.textAlign = 'left'
             ctx.textBaseline = 'middle'
-            ctx.fillText(txt, cx + r + 7, cy - 7)
+            ctx.fillText(txt, cx + r + 7, cy - th / 2 - 2)
             if (a.std !== undefined) {
               ctx.fillStyle = '#0F172A'
               const txt2 = `SD: ${a.std} HU`
               const tw2 = ctx.measureText(txt2).width + 6
-              ctx.fillRect(cx + r + 4, cy + 2, tw2, 14)
+              ctx.fillRect(cx + r + 4, cy + 2, tw2, th)
               ctx.fillStyle = '#22D3EE'
-              ctx.fillText(txt2, cx + r + 7, cy + 9)
+              ctx.fillText(txt2, cx + r + 7, cy + 2 + th / 2)
             }
           }
         }
       } else if (ann.type === 'arrow') {
         const a = ann as any
         const angle = Math.atan2(a.endY - a.startY, a.endX - a.startX)
-        const headLen = 10
+        const headLen = 10 / Math.max(0.5, zoom)
+        if (isPreviewId(ann.id)) {
+          ctx.setLineDash([3, 3])
+        }
         ctx.beginPath()
         ctx.moveTo(a.startX, a.startY)
         ctx.lineTo(a.endX, a.endY)
         ctx.stroke()
+        ctx.setLineDash([])
         ctx.beginPath()
         ctx.moveTo(a.endX, a.endY)
         ctx.lineTo(
@@ -449,25 +459,26 @@ export default function ViewerPage() {
         )
         ctx.stroke()
         ctx.beginPath()
-        ctx.arc(a.startX, a.startY, 3, 0, Math.PI * 2)
+        ctx.arc(a.startX, a.startY, 3 / Math.max(0.5, zoom), 0, Math.PI * 2)
         ctx.fill()
       } else if (ann.type === 'text') {
         const a = ann as any
         ctx.fillStyle = '#0F172A'
         const tw = ctx.measureText(a.text || '').width + 8
-        ctx.fillRect(a.x, a.y - 14, tw, 16)
+        const th = fontSize + 8
+        ctx.fillRect(a.x, a.y - th - 2, tw, th)
         ctx.fillStyle = '#22D3EE'
         ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
-        ctx.fillText(a.text || '', a.x + 4, a.y - 6)
+        ctx.fillText(a.text || '', a.x + 4, a.y - th / 2 - 2)
         ctx.beginPath()
         ctx.moveTo(a.x, a.y)
-        ctx.lineTo(a.x + 6, a.y - 14)
+        ctx.lineTo(a.x + 6, a.y - th - 2)
         ctx.stroke()
       }
       ctx.restore()
     }
-  }, [annotations, drawingPoints, activeTool, currentImage])
+  }, [annotations, drawingPoints, activeTool, currentImage, zoom])
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
@@ -504,11 +515,20 @@ export default function ViewerPage() {
       ctx.drawImage(img, ix, iy, iw, ih)
       ctx.restore()
 
+      ctx.save()
       ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)'
       ctx.lineWidth = 1
       ctx.strokeRect(ix, iy, iw, ih)
+      ctx.restore()
 
+      ctx.save()
+      ctx.translate(cw / 2 + pan.x, ch / 2 + pan.y)
+      ctx.scale(flipH ? -zoom : zoom, flipV ? -zoom : zoom)
+      ctx.rotate((rotation * Math.PI) / 180)
+      ctx.translate(-cw / 2, -ch / 2)
+      ctx.filter = 'none'
       drawAnnotations(ctx, cw, ch)
+      ctx.restore()
     }
     img.src = currentImage.url
   }, [currentImage, zoom, rotation, flipH, flipV, pan, filterStyle, drawAnnotations])
@@ -668,7 +688,8 @@ export default function ViewerPage() {
     } else if (activeTool === 'angle') {
       setDrawingPoints((prev) => {
         if (prev.length === 0) return prev
-        return [...prev.slice(0, -1), { x, y }]
+        const newPoint = { x, y }
+        return [...prev, newPoint]
       })
     }
   }, [activeTool, setMouseCoord, setPan])

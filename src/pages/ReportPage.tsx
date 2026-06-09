@@ -289,18 +289,18 @@ export default function ReportPage() {
   }
 
   const timelineSteps = [
-    { key: 'draft', label: '草稿', done: ['draft', 'submitted', 'reviewing', 'approved', 'rejected'].includes(effectiveStatus) },
+    { key: 'draft', label: '草稿创建', done: ['draft', 'submitted', 'reviewing', 'approved', 'rejected'].includes(effectiveStatus) },
     { key: 'submitted', label: '已提交', done: ['submitted', 'reviewing', 'approved', 'rejected'].includes(effectiveStatus) },
-    { key: 'reviewing', label: '审核中', done: ['reviewing', 'approved', 'rejected'].includes(effectiveStatus) || effectiveStatus === 'submitted' },
+    { key: 'reviewing', label: '审核中', done: ['reviewing', 'approved'].includes(effectiveStatus) },
     { key: 'approved', label: '已审核', done: ['approved'].includes(effectiveStatus) },
   ]
 
   const currentStepIndex = (() => {
-    if (['approved'].includes(effectiveStatus)) return 3
-    if (['reviewing'].includes(effectiveStatus)) return 2
-    if (['submitted'].includes(effectiveStatus)) return 2
-    if (['rejected'].includes(effectiveStatus)) return 1
-    if (['draft'].includes(effectiveStatus)) return 0
+    if (effectiveStatus === 'approved') return 3
+    if (effectiveStatus === 'reviewing') return 2
+    if (effectiveStatus === 'submitted') return 1
+    if (effectiveStatus === 'rejected') return 1
+    if (effectiveStatus === 'draft') return 0
     return -1
   })()
 
@@ -363,7 +363,7 @@ export default function ReportPage() {
                 variant="primary"
                 size="md"
                 onClick={handleSubmitReport}
-                disabled={effectiveStatus === 'submitted' || effectiveStatus === 'approved'}
+                disabled={effectiveStatus === 'approved'}
               >
                 <Send size={16} />
                 提交审核
@@ -770,17 +770,21 @@ export default function ReportPage() {
                 {timelineSteps.map((step, idx) => {
                   const isCurrent = idx === currentStepIndex
                   const isDone = step.done
+                  const isRejectedNode = idx === 1 && effectiveStatus === 'rejected'
                   return (
                     <div key={step.key} className="relative pb-5 last:pb-0">
                       <div
                         className={cn(
                           'absolute -left-[17px] top-0 h-6 w-6 rounded-full border-2 flex items-center justify-center transition-all',
-                          isDone && 'bg-emerald-500 border-emerald-500',
-                          isCurrent && !isDone && 'bg-white border-blue-500 ring-4 ring-blue-100',
-                          !isDone && !isCurrent && 'bg-white border-slate-300'
+                          isRejectedNode && 'bg-red-500 border-red-500',
+                          !isRejectedNode && isDone && 'bg-emerald-500 border-emerald-500',
+                          !isRejectedNode && isCurrent && !isDone && 'bg-white border-blue-500 ring-4 ring-blue-100',
+                          !isRejectedNode && !isDone && !isCurrent && 'bg-white border-slate-300'
                         )}
                       >
-                        {isDone ? (
+                        {isRejectedNode ? (
+                          <X size={12} className="text-white" />
+                        ) : isDone ? (
                           <Check size={12} className="text-white" />
                         ) : isCurrent ? (
                           <span className="relative flex h-2.5 w-2.5">
@@ -790,16 +794,25 @@ export default function ReportPage() {
                         ) : null}
                       </div>
                       <div className="space-y-0.5 pt-0.5">
-                        <p
-                          className={cn(
-                            'text-sm font-medium',
-                            (isDone || isCurrent) ? 'text-slate-900' : 'text-slate-400'
+                        <div className="flex items-center gap-2">
+                          <p
+                            className={cn(
+                              'text-sm font-medium',
+                              (isDone || isCurrent) ? 'text-slate-900' : 'text-slate-400'
+                            )}
+                          >
+                            {step.label}
+                          </p>
+                          {isRejectedNode && (
+                            <Badge variant="danger" className="text-[10px] h-5 px-1.5">
+                              已退回
+                            </Badge>
                           )}
-                        >
-                          {step.label}
-                        </p>
+                        </div>
                         <p className="text-[11px] text-slate-400">
-                          {isCurrent
+                          {isRejectedNode
+                            ? '请修改后重新提交'
+                            : isCurrent
                             ? '进行中...'
                             : isDone
                             ? '已完成'
