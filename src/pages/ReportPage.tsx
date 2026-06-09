@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ChevronRight,
@@ -49,8 +49,11 @@ interface Toast {
   type: ToastType
 }
 
-const STATUS_CONFIG: Record<ReportStatus, { label: string; variant: 'default' | 'success' | 'warning' | 'danger' | 'info' }> = {
-  draft: { label: '草稿', variant: 'default' },
+type EffectiveStatus = ReportStatus | 'not_started'
+
+const STATUS_CONFIG: Record<EffectiveStatus, { label: string; variant: 'default' | 'success' | 'warning' | 'danger' | 'info' }> = {
+  not_started: { label: '未开始', variant: 'default' },
+  draft: { label: '草稿', variant: 'info' },
   submitted: { label: '待审核', variant: 'warning' },
   reviewing: { label: '审核中', variant: 'info' },
   approved: { label: '已审核', variant: 'success' },
@@ -84,11 +87,11 @@ export default function ReportPage() {
   const navigate = useNavigate()
   const { studies, getStudyById } = useStudyStore()
   const {
-    findings,
-    impression,
+    activeStudyId,
     templates,
-    activeTemplateId,
-    currentReport,
+    reportByStudy,
+    setActiveStudy,
+    getActive,
     setFindings,
     setImpression,
     applyTemplate,
@@ -105,7 +108,16 @@ export default function ReportPage() {
     return studies[0]
   }, [studyId, getStudyById, studies])
 
-  const effectiveStatus: ReportStatus = (currentReport?.status as ReportStatus) || 'draft'
+  useEffect(() => {
+    if (study?.id) {
+      setActiveStudy(study.id)
+    }
+  }, [study?.id, setActiveStudy])
+
+  const active = getActive()
+
+  const rawStatus = active.currentReport?.status
+  const effectiveStatus: EffectiveStatus = rawStatus || 'not_started'
 
   const [toasts, setToasts] = useState<Toast[]>([])
   const [searchKeyword, setSearchKeyword] = useState('')
@@ -158,14 +170,14 @@ export default function ReportPage() {
   }
 
   const handleSaveDraft = () => {
-    if (!study || !currentUser) return
-    saveDraft(study.id, currentUser.id)
+    if (!currentUser) return
+    saveDraft(currentUser.id)
     showToast('草稿已保存', 'success')
   }
 
   const handleSubmitReport = () => {
-    if (!study || !currentUser) return
-    submitReport(study.id, currentUser.id)
+    if (!currentUser) return
+    submitReport(currentUser.id)
     showToast('已提交审核', 'success')
   }
 
@@ -191,9 +203,10 @@ export default function ReportPage() {
     if (!textarea) return
     const start = textarea.selectionStart
     const end = textarea.selectionEnd
-    const before = findingsRef.current === textarea ? findings : impression
+    const isFindings = findingsRef.current === textarea
+    const before = isFindings ? active.findings : active.impression
     const newValue = before.substring(0, start) + text + before.substring(end)
-    if (findingsRef.current === textarea) {
+    if (isFindings) {
       setFindings(newValue)
     } else {
       setImpression(newValue)
@@ -206,12 +219,12 @@ export default function ReportPage() {
 
   const handleInsertNormal = () => {
     const normalText = '各脏器大小形态正常，实质密度均匀，未见明确异常密度灶。'
-    setFindings(findings ? findings + '\n' + normalText : normalText)
+    setFindings(active.findings ? active.findings + '\n' + normalText : normalText)
   }
 
   const handleInsertAbnormal = () => {
     const abnormalText = '于_____部位可见异常改变，建议进一步检查明确性质。'
-    setFindings(findings ? findings + '\n' + abnormalText : abnormalText)
+    setFindings(active.findings ? active.findings + '\n' + abnormalText : abnormalText)
   }
 
   const handleQuickPhrase = (phrase: string) => {
@@ -223,7 +236,7 @@ export default function ReportPage() {
     if (!textarea) return
     const start = textarea.selectionStart
     const end = textarea.selectionEnd
-    const selected = impression.substring(start, end) || '加粗文字'
+    const selected = active.impression.substring(start, end) || '加粗文字'
     const boldText = `**${selected}**`
     insertAtCursor(textarea, boldText)
   }
@@ -233,13 +246,13 @@ export default function ReportPage() {
     if (!textarea) return
     const start = textarea.selectionStart
     const end = textarea.selectionEnd
-    const selected = impression.substring(start, end) || '高亮文字'
+    const selected = active.impression.substring(start, end) || '高亮文字'
     const highlightText = `【${selected}】`
     insertAtCursor(textarea, highlightText)
   }
 
   const handleInsertAISuggestion = (suggestion: string) => {
-    setImpression(impression ? impression + '\n' + suggestion : suggestion)
+    setImpression(active.impression ? active.impression + '\n' + suggestion : suggestion)
   }
 
   const handleSignature = () => {
@@ -249,11 +262,7 @@ export default function ReportPage() {
     }
     setIsSigning(true)
     setTimeout(() => {
-      if (currentReport && currentReport.id) {
-        auditReport(currentReport.id, 'approved', currentUser?.id || 'U001', '审核通过')
-      } else {
-        auditReport('temp-report-id', 'approved', currentUser?.id || 'U001', '审核通过')
-      }
+      auditReport('approved', currentUser?.id || 'U001', signaturePassword)
       setIsSigning(false)
       setShowSignatureModal(false)
       setSignaturePassword('')
@@ -262,9 +271,7 @@ export default function ReportPage() {
   }
 
   const handleAuditApprove = () => {
-    if (currentReport && currentReport.id) {
-      auditReport(currentReport.id, 'approved', currentUser?.id || 'U001', auditComment || '审核通过')
-    }
+    auditReport('approved', currentUser?.id || 'U001', auditComment || '审核通过')
     showToast('审核通过', 'success')
   }
 
@@ -273,9 +280,7 @@ export default function ReportPage() {
       showToast('请填写审核意见', 'warning')
       return
     }
-    if (currentReport && currentReport.id) {
-      auditReport(currentReport.id, 'rejected', currentUser?.id || 'U001', auditComment)
-    }
+    auditReport('rejected', currentUser?.id || 'U001', auditComment)
     showToast('报告已退回', 'warning')
   }
 
@@ -284,20 +289,22 @@ export default function ReportPage() {
   }
 
   const timelineSteps = [
-    { key: 'created', label: '创建草稿', done: true },
-    { key: 'writing', label: '撰写中', done: ['submitted', 'reviewing', 'approved'].includes(effectiveStatus) },
-    { key: 'submitted', label: '提交审核', done: ['reviewing', 'approved'].includes(effectiveStatus) },
-    { key: 'approved', label: '审核完成', done: ['approved'].includes(effectiveStatus) },
+    { key: 'draft', label: '草稿', done: ['draft', 'submitted', 'reviewing', 'approved', 'rejected'].includes(effectiveStatus) },
+    { key: 'submitted', label: '已提交', done: ['submitted', 'reviewing', 'approved', 'rejected'].includes(effectiveStatus) },
+    { key: 'reviewing', label: '审核中', done: ['reviewing', 'approved', 'rejected'].includes(effectiveStatus) || effectiveStatus === 'submitted' },
+    { key: 'approved', label: '已审核', done: ['approved'].includes(effectiveStatus) },
   ]
 
   const currentStepIndex = (() => {
     if (['approved'].includes(effectiveStatus)) return 3
     if (['reviewing'].includes(effectiveStatus)) return 2
     if (['submitted'].includes(effectiveStatus)) return 2
-    return 1
+    if (['rejected'].includes(effectiveStatus)) return 1
+    if (['draft'].includes(effectiveStatus)) return 0
+    return -1
   })()
 
-  const statusCfg = STATUS_CONFIG[effectiveStatus] || STATUS_CONFIG.draft
+  const statusCfg = STATUS_CONFIG[effectiveStatus] || STATUS_CONFIG.not_started
 
   return (
     <div className="h-full flex flex-col bg-slate-50">
@@ -420,7 +427,7 @@ export default function ReportPage() {
                   key={tpl.id}
                   className={cn(
                     'transition-all cursor-pointer hover:shadow-md hover:border-blue-200',
-                    activeTemplateId === tpl.id && 'border-blue-400 ring-2 ring-blue-100'
+                    active.activeTemplateId === tpl.id && 'border-blue-400 ring-2 ring-blue-100'
                   )}
                 >
                   <CardContent className="p-3 space-y-2">
@@ -463,12 +470,12 @@ export default function ReportPage() {
                       </span>
                       <Button
                         size="sm"
-                        variant={activeTemplateId === tpl.id ? 'primary' : 'secondary'}
+                        variant={active.activeTemplateId === tpl.id ? 'primary' : 'secondary'}
                         className="h-7 text-xs px-2"
                         onClick={() => handleApplyTemplate(tpl.id)}
                       >
-                        {activeTemplateId === tpl.id ? <Check size={12} /> : <Plus size={12} />}
-                        {activeTemplateId === tpl.id ? '已套用' : '套用'}
+                        {active.activeTemplateId === tpl.id ? <Check size={12} /> : <Plus size={12} />}
+                        {active.activeTemplateId === tpl.id ? '已套用' : '套用'}
                       </Button>
                     </div>
                   </CardContent>
@@ -580,7 +587,7 @@ export default function ReportPage() {
                 <div className="flex items-center gap-2">
                   <CardTitle className="text-base">影像所见 Findings</CardTitle>
                   <Badge variant="info" className="text-[10px]">
-                    {findings.length} 字
+                    {active.findings.length} 字
                   </Badge>
                 </div>
               </CardHeader>
@@ -616,7 +623,7 @@ export default function ReportPage() {
                 </div>
                 <textarea
                   ref={findingsRef}
-                  value={findings}
+                  value={active.findings}
                   onChange={(e) => setFindings(e.target.value)}
                   placeholder="请输入影像所见描述..."
                   className="w-full min-h-[240px] rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-y leading-relaxed"
@@ -637,7 +644,7 @@ export default function ReportPage() {
                 <div className="flex items-center gap-2">
                   <CardTitle className="text-base">诊断结论 Impression</CardTitle>
                   <Badge variant="info" className="text-[10px]">
-                    {impression.length} 字
+                    {active.impression.length} 字
                   </Badge>
                 </div>
               </CardHeader>
@@ -702,7 +709,7 @@ export default function ReportPage() {
 
                 <textarea
                   ref={impressionRef}
-                  value={impression}
+                  value={active.impression}
                   onChange={(e) => setImpression(e.target.value)}
                   placeholder="请输入诊断结论..."
                   className="w-full min-h-[160px] rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-y leading-relaxed font-medium"

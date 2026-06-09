@@ -11,7 +11,7 @@ import { studies as mockStudies } from '@/mock/studies'
 import {
   useViewerStore, windowPresets as viewerWindowPresets
 } from '@/stores/viewerStore'
-import type { LayoutType, ToolType, Series, Image } from '@/types'
+import type { LayoutType, ToolType, Series, Image, Annotation } from '@/types'
 import { cn } from '@/lib/utils'
 
 const layouts: { value: LayoutType; label: string }[] = [
@@ -47,16 +47,28 @@ export default function ViewerPage() {
   const seriesList = study.series
 
   const {
-    activeSeriesId, activeImageIndex, layout, zoom, rotation, flipH, flipV, pan,
-    windowLevel, activeTool, annotations, syncMode, compareMode, autoPlay,
-    expandedSeries, mouseCoord, mouseHU,
+    activeStudyId, layout, activeTool, syncMode, compareMode, autoPlay,
+    mouseCoord, mouseHU,
     setActiveStudy, setActiveSeries, setActiveImageIndex, nextImage, prevImage,
     setLayout, setZoom, rotateLeft, rotateRight, rotate180,
-    setFlipH, setWindowLevel, applyPreset, setActiveTool,
+    setFlipH, setFlipV, setWindowLevel, applyPreset, setActiveTool,
     clearAnnotations, undoAnnotation, setSyncMode, setCompareMode,
     setAutoPlay, toggleSeriesExpanded, setMouseCoord, resetView,
-    addAnnotation, setPan
+    addAnnotation, setPan, setRotation
   } = useViewerStore()
+
+  const perStudy = useViewerStore(s => s.activeStudyId ? s.viewerByStudy[s.activeStudyId] : null)
+
+  const _activeSeriesId = perStudy?.activeSeriesId ?? null
+  const activeImageIndex = perStudy?.activeImageIndex ?? 0
+  const zoom = perStudy?.zoom ?? 1
+  const rotation = perStudy?.rotation ?? 0
+  const flipH = perStudy?.flipH ?? false
+  const flipV = perStudy?.flipV ?? false
+  const pan = perStudy?.pan ?? { x: 0, y: 0 }
+  const windowLevel = perStudy?.windowLevel ?? { center: 40, width: 400 }
+  const annotations = perStudy?.annotations ?? []
+  const expandedSeries = perStudy?.expandedSeries ?? new Set<string>()
 
   const [effectiveSeriesId, setEffectiveSeriesId] = useState<string>(
     seriesList[0]?.id ?? ''
@@ -103,16 +115,18 @@ export default function ViewerPage() {
     return mockStudies.filter((s) => s.id !== study.id)
   }, [study.id])
 
+  const activeSeriesId = _activeSeriesId ?? effectiveSeriesId
+
   const mainSeriesIndex = useMemo(() => {
-    const id = activeSeriesId || effectiveSeriesId
+    const id = activeSeriesId
     const idx = seriesList.findIndex((s) => s.id === id)
     return idx >= 0 ? idx : 0
-  }, [activeSeriesId, effectiveSeriesId, seriesList])
+  }, [activeSeriesId, seriesList])
 
   const activeSeries = useMemo(() => {
-    const id = activeSeriesId || effectiveSeriesId
+    const id = activeSeriesId
     return seriesList.find((s) => s.id === id) ?? seriesList[0]
-  }, [activeSeriesId, effectiveSeriesId, seriesList])
+  }, [activeSeriesId, seriesList])
 
   const displayImages = useMemo(() => {
     if (!activeSeries?.images?.length) return [] as Image[]
@@ -127,18 +141,28 @@ export default function ViewerPage() {
   useEffect(() => {
     if (studyId) {
       setActiveStudy(studyId)
-      if (!expandedSeries.has(study.id)) {
-        toggleSeriesExpanded(study.id)
-      }
     }
-    if (seriesList.length > 0) {
+  }, [studyId, setActiveStudy])
+
+  useEffect(() => {
+    if (activeStudyId && !expandedSeries.has(study.id)) {
+      toggleSeriesExpanded(study.id)
+    }
+  }, [activeStudyId, study.id, expandedSeries, toggleSeriesExpanded])
+
+  useEffect(() => {
+    if (seriesList.length > 0 && activeStudyId) {
       const firstSeriesId = seriesList[0].id
-      if (!activeSeriesId && !effectiveSeriesId) {
+      if (!_activeSeriesId && !effectiveSeriesId) {
         setActiveSeries(firstSeriesId)
         setEffectiveSeriesId(firstSeriesId)
+      } else if (!_activeSeriesId && effectiveSeriesId) {
+        setActiveSeries(effectiveSeriesId)
+      } else if (_activeSeriesId && _activeSeriesId !== effectiveSeriesId) {
+        setEffectiveSeriesId(_activeSeriesId)
       }
     }
-  }, [studyId, study.id])
+  }, [seriesList, activeStudyId, _activeSeriesId, effectiveSeriesId, setActiveSeries])
 
   useEffect(() => {
     if (!compareMode || !syncMode) return
@@ -207,6 +231,244 @@ export default function ViewerPage() {
     return `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)})`
   }, [compareWindowLevel])
 
+  const drawAnnotations = useCallback((ctx: CanvasRenderingContext2D, cw: number, ch: number) => {
+    const allToDraw: Annotation[] = [...annotations]
+    if (drawingPoints.length > 0) {
+      if (activeTool === 'angle' && drawingPoints.length === 1) {
+        allToDraw.push({
+          id: '_preview',
+          type: 'length',
+          imageId: currentImage?.id ?? '',
+          startX: drawingPoints[0].x,
+          startY: drawingPoints[0].y,
+          endX: drawingPoints[0].x,
+          endY: drawingPoints[0].y,
+          value: 0,
+          unit: 'mm',
+        } as any)
+      } else if (activeTool === 'length' || activeTool === 'area' || activeTool === 'ctvalue' || activeTool === 'arrow') {
+        if (drawingPoints.length >= 2) {
+          const p0 = drawingPoints[0]
+          const p1 = drawingPoints[1]
+          if (activeTool === 'length') {
+            allToDraw.push({
+              id: '_preview',
+              type: 'length',
+              imageId: currentImage?.id ?? '',
+              startX: p0.x,
+              startY: p0.y,
+              endX: p1.x,
+              endY: p1.y,
+              value: 0,
+              unit: 'mm',
+            } as any)
+          } else if (activeTool === 'area') {
+            allToDraw.push({
+              id: '_preview',
+              type: 'area',
+              imageId: currentImage?.id ?? '',
+              points: [p0, p1],
+              value: 0,
+              unit: 'mm²',
+            } as any)
+          } else if (activeTool === 'ctvalue') {
+            allToDraw.push({
+              id: '_preview',
+              type: 'ctvalue',
+              imageId: currentImage?.id ?? '',
+              x: p0.x,
+              y: p0.y,
+              endX: p1.x,
+              endY: p1.y,
+              meanHu: 0,
+              std: 0,
+            } as any)
+          } else if (activeTool === 'arrow') {
+            allToDraw.push({
+              id: '_preview',
+              type: 'arrow',
+              imageId: currentImage?.id ?? '',
+              startX: p0.x,
+              startY: p0.y,
+              endX: p1.x,
+              endY: p1.y,
+              label: '',
+            } as any)
+          }
+        }
+      } else if (activeTool === 'angle') {
+        const pts = [...drawingPoints]
+        for (let i = 0; i < pts.length - 1; i++) {
+          const p0 = pts[i]
+          const p1 = pts[i + 1]
+          allToDraw.push({
+            id: `_preview_${i}`,
+            type: 'length',
+            imageId: currentImage?.id ?? '',
+            startX: p0.x,
+            startY: p0.y,
+            endX: p1.x,
+            endY: p1.y,
+            value: 0,
+            unit: '',
+          } as any)
+        }
+      }
+    }
+
+    for (const ann of allToDraw) {
+      ctx.save()
+      ctx.strokeStyle = '#22D3EE'
+      ctx.fillStyle = '#22D3EE'
+      ctx.lineWidth = 1.5
+      ctx.font = '11px monospace'
+
+      if (ann.type === 'length') {
+        const a = ann as any
+        ctx.beginPath()
+        ctx.moveTo(a.startX, a.startY)
+        ctx.lineTo(a.endX, a.endY)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.arc(a.startX, a.startY, 3, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.beginPath()
+        ctx.arc(a.endX, a.endY, 3, 0, Math.PI * 2)
+        ctx.fill()
+        if (a.value && a.value > 0) {
+          const mx = (a.startX + a.endX) / 2
+          const my = (a.startY + a.endY) / 2
+          ctx.fillStyle = '#0F172A'
+          const txt = `${a.value.toFixed(1)} ${a.unit || ''}`
+          const tw = ctx.measureText(txt).width + 6
+          ctx.fillRect(mx - tw / 2, my - 7, tw, 14)
+          ctx.fillStyle = '#22D3EE'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(txt, mx, my)
+        }
+      } else if (ann.type === 'angle') {
+        const a = ann as any
+        const pts = [a.point1, a.point2, a.point3]
+        ctx.beginPath()
+        ctx.moveTo(a.point1.x, a.point1.y)
+        ctx.lineTo(a.point2.x, a.point2.y)
+        ctx.lineTo(a.point3.x, a.point3.y)
+        ctx.stroke()
+        for (const p of pts) {
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2)
+          ctx.fill()
+        }
+        if (typeof a.value !== undefined) {
+          ctx.fillStyle = '#0F172A'
+          const txt = `${a.value.toFixed(1)}°`
+          const tw = ctx.measureText(txt).width + 6
+          ctx.fillRect(a.point2.x - tw / 2, a.point2.y - 20, tw, 14)
+          ctx.fillStyle = '#22D3EE'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(txt, a.point2.x, a.point2.y - 13)
+        }
+      } else if (ann.type === 'area') {
+        const a = ann as any
+        const pts = a.points as Array<{ x: number; y: number }>
+        const p0 = pts[0]
+        const p1 = pts[1]
+        const x = Math.min(p0.x, p1.x)
+        const y = Math.min(p0.y, p1.y)
+        const w = Math.abs(p1.x - p0.x)
+        const h = Math.abs(p1.y - p0.y)
+        ctx.setLineDash([4, 2])
+        ctx.strokeRect(x, y, w, h)
+        ctx.setLineDash([])
+        if (a.value && a.value > 0) {
+          ctx.fillStyle = '#0F172A'
+          const txt = `${a.value.toFixed(1)} ${a.unit || ''}`
+          const tw = ctx.measureText(txt).width + 6
+          ctx.fillRect(x + w / 2 - tw / 2, y - 16, tw, 14)
+          ctx.fillStyle = '#22D3EE'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(txt, x + w / 2, y - 9)
+        }
+      } else if (ann.type === 'ctvalue') {
+        const a = ann as any
+        const cx = a.x
+        const cy = a.y
+        const r = Math.sqrt((a.endX - a.x) ** 2 + (a.endY - a.y) ** 2)
+        if (r > 0) {
+          ctx.beginPath()
+          ctx.arc(cx, cy, r, 0, Math.PI * 2)
+          ctx.setLineDash([3, 2])
+          ctx.stroke()
+          ctx.setLineDash([])
+          ctx.beginPath()
+          ctx.moveTo(cx - r / 2, cy)
+          ctx.lineTo(cx + r / 2, cy)
+          ctx.moveTo(cx, cy - r / 2)
+          ctx.lineTo(cx, cy + r / 2)
+          ctx.stroke()
+          if (a.meanHu !== undefined) {
+            ctx.fillStyle = '#0F172A'
+            const txt = `Mean: ${a.meanHu} HU`
+            const tw = ctx.measureText(txt).width + 6
+            ctx.fillRect(cx + r + 4, cy - 14, tw, 14)
+            ctx.fillStyle = '#22D3EE'
+            ctx.textAlign = 'left'
+            ctx.textBaseline = 'middle'
+            ctx.fillText(txt, cx + r + 7, cy - 7)
+            if (a.std !== undefined) {
+              ctx.fillStyle = '#0F172A'
+              const txt2 = `SD: ${a.std} HU`
+              const tw2 = ctx.measureText(txt2).width + 6
+              ctx.fillRect(cx + r + 4, cy + 2, tw2, 14)
+              ctx.fillStyle = '#22D3EE'
+              ctx.fillText(txt2, cx + r + 7, cy + 9)
+            }
+          }
+        }
+      } else if (ann.type === 'arrow') {
+        const a = ann as any
+        const angle = Math.atan2(a.endY - a.startY, a.endX - a.startX)
+        const headLen = 10
+        ctx.beginPath()
+        ctx.moveTo(a.startX, a.startY)
+        ctx.lineTo(a.endX, a.endY)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(a.endX, a.endY)
+        ctx.lineTo(
+          a.endX - headLen * Math.cos(angle - Math.PI / 6),
+          a.endY - headLen * Math.sin(angle - Math.PI / 6)
+        )
+        ctx.moveTo(a.endX, a.endY)
+        ctx.lineTo(
+          a.endX - headLen * Math.cos(angle + Math.PI / 6),
+          a.endY - headLen * Math.sin(angle + Math.PI / 6)
+        )
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.arc(a.startX, a.startY, 3, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (ann.type === 'text') {
+        const a = ann as any
+        ctx.fillStyle = '#0F172A'
+        const tw = ctx.measureText(a.text || '').width + 8
+        ctx.fillRect(a.x, a.y - 14, tw, 16)
+        ctx.fillStyle = '#22D3EE'
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(a.text || '', a.x + 4, a.y - 6)
+        ctx.beginPath()
+        ctx.moveTo(a.x, a.y)
+        ctx.lineTo(a.x + 6, a.y - 14)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+  }, [annotations, drawingPoints, activeTool, currentImage])
+
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas || !currentImage) return
@@ -245,9 +507,11 @@ export default function ViewerPage() {
       ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)'
       ctx.lineWidth = 1
       ctx.strokeRect(ix, iy, iw, ih)
+
+      drawAnnotations(ctx, cw, ch)
     }
     img.src = currentImage.url
-  }, [currentImage, zoom, rotation, flipH, flipV, pan, filterStyle])
+  }, [currentImage, zoom, rotation, flipH, flipV, pan, filterStyle, drawAnnotations])
 
   const drawCompareCanvas = useCallback(() => {
     const canvas = compareCanvasRef.current
@@ -831,7 +1095,7 @@ export default function ViewerPage() {
               {expandedSeries.has(study.id) && (
                 <div className="space-y-1 pl-1">
                   {seriesList.map((series) => {
-                    const isActive = series.id === (activeSeriesId || effectiveSeriesId)
+                    const isActive = series.id === activeSeriesId
                     return (
                       <div
                         key={series.id}
