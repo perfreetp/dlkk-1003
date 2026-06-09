@@ -5,13 +5,14 @@ import {
   RotateCcw, RotateCw, FlipHorizontal, ChevronUp as ChevronUpIcon,
   Play, Pause, Grid3X3, Ruler, Triangle, CircleDot, Target, ArrowRight,
   Type, Trash2, Undo2, Split, Link, RefreshCw, LayoutGrid, User, Calendar,
-  MapPin, Scan, Layers, Maximize2, Minimize2, History
+  MapPin, Scan, Layers, Maximize2, Minimize2, History, BookmarkPlus,
+  BookmarkCheck, List, X, ChevronLeft
 } from 'lucide-react'
 import { studies as mockStudies } from '@/mock/studies'
 import {
   useViewerStore, windowPresets as viewerWindowPresets
 } from '@/stores/viewerStore'
-import type { LayoutType, ToolType, Series, Image, Annotation } from '@/types'
+import type { LayoutType, ToolType, Series, Image, Annotation, KeyImage } from '@/types'
 import { cn } from '@/lib/utils'
 
 const layouts: { value: LayoutType; label: string }[] = [
@@ -32,6 +33,8 @@ function maskPatientId(id: string): string {
   if (!id || id.length < 4) return id
   return id.slice(0, 2) + '****' + id.slice(-2)
 }
+
+type AnnotationTab = 'current' | 'study'
 
 export default function ViewerPage() {
   const { studyId } = useParams<{ studyId: string }>()
@@ -54,7 +57,8 @@ export default function ViewerPage() {
     setFlipH, setFlipV, setWindowLevel, applyPreset, setActiveTool,
     clearAnnotations, undoAnnotation, setSyncMode, setCompareMode,
     setAutoPlay, toggleSeriesExpanded, setMouseCoord, resetView,
-    addAnnotation, setPan, setRotation
+    addAnnotation, setPan, setRotation, removeAnnotation, removeAnnotationById,
+    addKeyImage, removeKeyImage, getKeyImagesForStudy
   } = useViewerStore()
 
   const perStudy = useViewerStore(s => s.activeStudyId ? s.viewerByStudy[s.activeStudyId] : null)
@@ -69,6 +73,7 @@ export default function ViewerPage() {
   const windowLevel = perStudy?.windowLevel ?? { center: 40, width: 400 }
   const annotations = perStudy?.annotations ?? []
   const expandedSeries = perStudy?.expandedSeries ?? new Set<string>()
+  const keyImages = perStudy?.keyImages ?? []
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -80,6 +85,9 @@ export default function ViewerPage() {
   const [drawingPoints, setDrawingPoints] = useState<Array<{ x: number; y: number }>>([])
   const annotationIdRef = useRef(0)
 
+  const angleClickCount = useRef(0)
+  const angleFixedPoints = useRef<{ x: number; y: number }[]>([])
+
   const [compareStudyId, setCompareStudyId] = useState<string>(mockStudies[1]?.id ?? '')
   const [compareSeriesIndex, setCompareSeriesIndex] = useState<number>(0)
   const [compareImageIndex, setCompareImageIndex] = useState<number>(0)
@@ -87,6 +95,13 @@ export default function ViewerPage() {
   const [compareWindowLevel, setCompareWindowLevel] = useState<{ center: number; width: number }>({ center: 40, width: 400 })
   const [compareAnnotations] = useState<any[]>([])
   const compareCanvasRef = useRef<HTMLCanvasElement>(null)
+
+  const [highlightedAnnId, setHighlightedAnnId] = useState<string | null>(null)
+  const [annotationPanelOpen, setAnnotationPanelOpen] = useState(true)
+  const [annotationTab, setAnnotationTab] = useState<AnnotationTab>('current')
+
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimerRef = useRef<number | null>(null)
 
   const compareStudy = useMemo(() => {
     return mockStudies.find((s) => s.id === compareStudyId) ?? mockStudies[1] ?? mockStudies[0]
@@ -132,6 +147,53 @@ export default function ViewerPage() {
     const idx = Math.min(activeImageIndex, displayImages.length - 1)
     return displayImages[idx]
   }, [activeImageIndex, displayImages])
+
+  const isCurrentImageKeyImage = useMemo(() => {
+    if (!currentImage || !activeSeriesId) return false
+    return keyImages.some(
+      k => k.seriesId === activeSeriesId && k.instanceNumber === currentImage.instanceNumber
+    )
+  }, [keyImages, currentImage, activeSeriesId])
+
+  const currentKeyImageEntry = useMemo(() => {
+    if (!currentImage || !activeSeriesId) return null
+    return keyImages.find(
+      k => k.seriesId === activeSeriesId && k.instanceNumber === currentImage.instanceNumber
+    ) || null
+  }, [keyImages, currentImage, activeSeriesId])
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current)
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 2000)
+  }, [])
+
+  const handleToggleKeyImage = useCallback(() => {
+    if (!currentImage || !activeSeriesId || !activeStudyId) return
+    if (isCurrentImageKeyImage && currentKeyImageEntry) {
+      removeKeyImage(currentKeyImageEntry.id)
+      showToast(`已移除 第 ${currentImage.instanceNumber} 帧`)
+    } else {
+      const ki: Omit<KeyImage, 'id' | 'createdAt'> = {
+        studyId: activeStudyId,
+        seriesId: activeSeriesId,
+        imageId: currentImage.id,
+        instanceNumber: currentImage.instanceNumber,
+        imageUrl: currentImage.url,
+        seriesDescription: activeSeries?.description ?? '',
+        note: '',
+        windowCenter: windowLevel.center,
+        windowWidth: windowLevel.width,
+      }
+      addKeyImage(ki)
+      showToast(`已添加 第 ${currentImage.instanceNumber} 帧为关键图`)
+    }
+  }, [currentImage, activeSeriesId, activeStudyId, isCurrentImageKeyImage, currentKeyImageEntry, removeKeyImage, addKeyImage, windowLevel, activeSeries?.description, showToast])
 
   useEffect(() => {
     if (studyId) {
@@ -306,15 +368,21 @@ export default function ViewerPage() {
 
     for (const ann of allToDraw) {
       ctx.save()
-      ctx.strokeStyle = '#22D3EE'
-      ctx.fillStyle = '#22D3EE'
-      ctx.lineWidth = 1.5
+      const isHighlighted = ann.id === highlightedAnnId
+      if (isHighlighted) {
+        ctx.strokeStyle = '#FACC15'
+        ctx.fillStyle = '#FACC15'
+        ctx.lineWidth = 2.5
+      } else {
+        ctx.strokeStyle = '#22D3EE'
+        ctx.fillStyle = '#22D3EE'
+        ctx.lineWidth = 1.5
+      }
       const fontSize = Math.max(8, Math.min(14, 11 / Math.max(0.5, zoom)))
       ctx.font = `${fontSize}px monospace`
 
       if (ann.type === 'length') {
         const a = ann as any
-        const isPrev = ann.id.startsWith('_preview')
         if (isPreviewId(ann.id)) {
           ctx.setLineDash([3, 3])
         }
@@ -337,7 +405,7 @@ export default function ViewerPage() {
           const tw = ctx.measureText(txt).width + 6
           const th = fontSize + 6
           ctx.fillRect(mx - tw / 2, my - th / 2, tw, th)
-          ctx.fillStyle = '#22D3EE'
+          ctx.fillStyle = isHighlighted ? '#FACC15' : '#22D3EE'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
           ctx.fillText(txt, mx, my)
@@ -361,7 +429,7 @@ export default function ViewerPage() {
           const tw = ctx.measureText(txt).width + 6
           const th = fontSize + 6
           ctx.fillRect(a.point2.x - tw / 2, a.point2.y - 20 / Math.max(0.5, zoom) - th / 2, tw, th)
-          ctx.fillStyle = '#22D3EE'
+          ctx.fillStyle = isHighlighted ? '#FACC15' : '#22D3EE'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
           ctx.fillText(txt, a.point2.x, a.point2.y - 20 / Math.max(0.5, zoom))
@@ -388,7 +456,7 @@ export default function ViewerPage() {
           const tw = ctx.measureText(txt).width + 6
           const th = fontSize + 6
           ctx.fillRect(x + w / 2 - tw / 2, y - 16 / Math.max(0.5, zoom) - th, tw, th)
-          ctx.fillStyle = '#22D3EE'
+          ctx.fillStyle = isHighlighted ? '#FACC15' : '#22D3EE'
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
           ctx.fillText(txt, x + w / 2, y - 16 / Math.max(0.5, zoom) - th / 2)
@@ -420,7 +488,7 @@ export default function ViewerPage() {
             const tw = ctx.measureText(txt).width + 6
             const th = fontSize + 6
             ctx.fillRect(cx + r + 4, cy - th - 2, tw, th)
-            ctx.fillStyle = '#22D3EE'
+            ctx.fillStyle = isHighlighted ? '#FACC15' : '#22D3EE'
             ctx.textAlign = 'left'
             ctx.textBaseline = 'middle'
             ctx.fillText(txt, cx + r + 7, cy - th / 2 - 2)
@@ -429,7 +497,7 @@ export default function ViewerPage() {
               const txt2 = `SD: ${a.std} HU`
               const tw2 = ctx.measureText(txt2).width + 6
               ctx.fillRect(cx + r + 4, cy + 2, tw2, th)
-              ctx.fillStyle = '#22D3EE'
+              ctx.fillStyle = isHighlighted ? '#FACC15' : '#22D3EE'
               ctx.fillText(txt2, cx + r + 7, cy + 2 + th / 2)
             }
           }
@@ -467,7 +535,7 @@ export default function ViewerPage() {
         const tw = ctx.measureText(a.text || '').width + 8
         const th = fontSize + 8
         ctx.fillRect(a.x, a.y - th - 2, tw, th)
-        ctx.fillStyle = '#22D3EE'
+        ctx.fillStyle = isHighlighted ? '#FACC15' : '#22D3EE'
         ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
         ctx.fillText(a.text || '', a.x + 4, a.y - th / 2 - 2)
@@ -478,7 +546,7 @@ export default function ViewerPage() {
       }
       ctx.restore()
     }
-  }, [annotations, drawingPoints, activeTool, currentImage, zoom])
+  }, [annotations, drawingPoints, activeTool, currentImage, zoom, highlightedAnnId])
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
@@ -529,9 +597,24 @@ export default function ViewerPage() {
       ctx.filter = 'none'
       drawAnnotations(ctx, cw, ch)
       ctx.restore()
+
+      if (isCurrentImageKeyImage) {
+        ctx.save()
+        ctx.fillStyle = '#FACC15'
+        ctx.font = 'bold 10px sans-serif'
+        const keyText = '📌 KEY'
+        const tw = ctx.measureText(keyText).width + 10
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'
+        ctx.fillRect(8, 8, tw, 20)
+        ctx.fillStyle = '#FACC15'
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(keyText, 13, 18)
+        ctx.restore()
+      }
     }
     img.src = currentImage.url
-  }, [currentImage, zoom, rotation, flipH, flipV, pan, filterStyle, drawAnnotations])
+  }, [currentImage, zoom, rotation, flipH, flipV, pan, filterStyle, drawAnnotations, isCurrentImageKeyImage])
 
   const drawCompareCanvas = useCallback(() => {
     const canvas = compareCanvasRef.current
@@ -631,33 +714,38 @@ export default function ViewerPage() {
     if (activeTool === 'length' || activeTool === 'area' || activeTool === 'ctvalue' || activeTool === 'arrow') {
       setDrawingPoints([{ x, y }])
     } else if (activeTool === 'angle') {
-      setDrawingPoints((prev) => {
-        const next = [...prev, { x, y }]
-        if (next.length === 3) {
-          const [p1, p2, p3] = next
-          const v1x = p1.x - p2.x
-          const v1y = p1.y - p2.y
-          const v2x = p3.x - p2.x
-          const v2y = p3.y - p2.y
-          const dot = v1x * v2x + v1y * v2y
-          const m1 = Math.sqrt(v1x * v1x + v1y * v1y)
-          const m2 = Math.sqrt(v2x * v2x + v2y * v2y)
-          const cos = Math.max(-1, Math.min(1, dot / (m1 * m2)))
-          const deg = (Math.acos(cos) * 180) / Math.PI
-          annotationIdRef.current += 1
-          addAnnotation({
-            id: `ann_${Date.now()}_${annotationIdRef.current}`,
-            type: 'angle',
-            imageId: currentImage?.id ?? '',
-            point1: p1,
-            point2: p2,
-            point3: p3,
-            value: deg,
-          } as any)
-          return []
-        }
-        return next
-      })
+      angleClickCount.current += 1
+      if (angleClickCount.current === 1) {
+        angleFixedPoints.current = [{ x, y }]
+        setDrawingPoints([{ x, y }])
+      } else if (angleClickCount.current === 2) {
+        angleFixedPoints.current = [...angleFixedPoints.current, { x, y }]
+      } else if (angleClickCount.current === 3) {
+        angleFixedPoints.current = [...angleFixedPoints.current, { x, y }]
+        const [p1, p2, p3] = angleFixedPoints.current
+        const v1x = p1.x - p2.x
+        const v1y = p1.y - p2.y
+        const v2x = p3.x - p2.x
+        const v2y = p3.y - p2.y
+        const dot = v1x * v2x + v1y * v2y
+        const m1 = Math.sqrt(v1x * v1x + v1y * v1y)
+        const m2 = Math.sqrt(v2x * v2x + v2y * v2y)
+        const cos = Math.max(-1, Math.min(1, dot / (m1 * m2)))
+        const deg = (Math.acos(cos) * 180) / Math.PI
+        annotationIdRef.current += 1
+        addAnnotation({
+          id: `ann_${Date.now()}_${annotationIdRef.current}`,
+          type: 'angle',
+          imageId: currentImage?.id ?? '',
+          point1: p1,
+          point2: p2,
+          point3: p3,
+          value: deg,
+        } as any)
+        angleClickCount.current = 0
+        angleFixedPoints.current = []
+        setDrawingPoints([])
+      }
     }
   }, [activeTool, pan, addAnnotation, currentImage])
 
@@ -686,11 +774,11 @@ export default function ViewerPage() {
         return [prev[0], { x, y }]
       })
     } else if (activeTool === 'angle') {
-      setDrawingPoints((prev) => {
-        if (prev.length === 0) return prev
-        const newPoint = { x, y }
-        return [...prev, newPoint]
-      })
+      if (angleClickCount.current === 1) {
+        setDrawingPoints([angleFixedPoints.current[0], { x, y }])
+      } else if (angleClickCount.current === 2) {
+        setDrawingPoints([...angleFixedPoints.current, { x, y }])
+      }
     }
   }, [activeTool, setMouseCoord, setPan])
 
@@ -818,6 +906,67 @@ export default function ViewerPage() {
   }
 
   const tileCount = parseInt(layout.split('x')[0]) * parseInt(layout.split('x')[1])
+
+  const filteredAnnotations = useMemo(() => {
+    if (annotationTab === 'current') {
+      return annotations.filter(a => a.imageId === currentImage?.id)
+    }
+    return annotations
+  }, [annotations, annotationTab, currentImage])
+
+  const groupedAnnotations = useMemo(() => {
+    const groups: Record<string, Annotation[]> = {}
+    for (const ann of filteredAnnotations) {
+      const t = ann.type
+      if (!groups[t]) groups[t] = []
+      groups[t].push(ann)
+    }
+    return groups
+  }, [filteredAnnotations])
+
+  const getAnnotationSummary = (ann: Annotation): string => {
+    const a = ann as any
+    switch (ann.type) {
+      case 'length':
+        return a.value ? `${a.value.toFixed(1)}mm` : ''
+      case 'angle':
+        return a.value !== undefined ? `${a.value.toFixed(1)}°` : ''
+      case 'area':
+        return a.value ? `${a.value.toFixed(1)}mm²` : ''
+      case 'ctvalue':
+        return `Mean ${a.meanHu ?? 0}HU`
+      case 'arrow':
+        return '→'
+      case 'text':
+        return `"${(a.text || '').slice(0, 10)}${(a.text || '').length > 10 ? '...' : ''}"`
+      default:
+        return ''
+    }
+  }
+
+  const getAnnotationIcon = (type: string) => {
+    switch (type) {
+      case 'length': return 'Ruler'
+      case 'angle': return '△'
+      case 'area': return '▭'
+      case 'ctvalue': return '⊙'
+      case 'arrow': return '→'
+      case 'text': return 'T'
+      default: return '•'
+    }
+  }
+
+  const getAnnotationTypeName = (type: string) => {
+    switch (type) {
+      case 'length': return '长度'
+      case 'angle': return '角度'
+      case 'area': return '面积'
+      case 'ctvalue': return 'CT值'
+      case 'arrow': return '箭头'
+      case 'text': return '文字'
+      default: return type
+    }
+  }
 
   const renderCanvasTile = (idx: number) => (
     <div
@@ -1016,6 +1165,19 @@ export default function ViewerPage() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleToggleKeyImage}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-md border flex items-center gap-1.5 transition-colors",
+              isCurrentImageKeyImage
+                ? "bg-amber-500/20 border-amber-500/60 text-amber-300"
+                : "bg-viewer-bg border-viewer-border text-gray-400 hover:border-amber-500/50 hover:text-amber-300"
+            )}
+          >
+            {isCurrentImageKeyImage ? <BookmarkCheck className="w-3.5 h-3.5 fill-amber-400" /> : <BookmarkPlus className="w-3.5 h-3.5" />}
+            <span>{isCurrentImageKeyImage ? '已设为关键图' : '设为关键图'}</span>
+            <span className="text-[10px] opacity-70 ml-1">({keyImages.length}张)</span>
+          </button>
           {viewerWindowPresets.map((preset) => (
             <button
               key={preset.name}
@@ -1298,10 +1460,15 @@ export default function ViewerPage() {
             </div>
           </div>
 
-          <div ref={containerRef} className="flex-1 p-2 overflow-hidden">
+          <div ref={containerRef} className="flex-1 p-2 overflow-hidden relative">
             {compareMode ? renderCompareMode() : (
               <div className={cn('grid gap-1 h-full w-full', getLayoutGridCols())}>
                 {Array.from({ length: tileCount }).map((_, idx) => renderCanvasTile(idx))}
+              </div>
+            )}
+            {toast && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-amber-500/90 text-white text-xs rounded-md shadow-lg z-50 pointer-events-none animate-pulse">
+                {toast}
               </div>
             )}
           </div>
@@ -1413,6 +1580,111 @@ export default function ViewerPage() {
             </button>
           ))}
         </div>
+
+        <div className={cn(
+          "bg-viewer-panel border-l border-viewer-border flex flex-col shrink-0 transition-all duration-200 overflow-hidden",
+          annotationPanelOpen ? "w-64" : "w-0"
+        )}>
+          <div className="h-10 flex items-center px-3 border-b border-viewer-border shrink-0">
+            <List className="w-4 h-4 text-medical-400 mr-2" />
+            <span className="text-xs font-medium text-gray-200">标注列表</span>
+            <button
+              onClick={() => setAnnotationPanelOpen(false)}
+              className="ml-auto w-6 h-6 rounded flex items-center justify-center text-gray-500 hover:bg-viewer-bg hover:text-gray-300"
+              title="折叠"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex border-b border-viewer-border shrink-0">
+            <button
+              onClick={() => setAnnotationTab('current')}
+              className={cn(
+                "flex-1 py-2 text-[11px] transition-colors border-b-2",
+                annotationTab === 'current'
+                  ? "text-medical-400 border-medical-500 bg-medical-500/10"
+                  : "text-gray-500 border-transparent hover:text-gray-300"
+              )}
+            >
+              当前影像
+            </button>
+            <button
+              onClick={() => setAnnotationTab('study')}
+              className={cn(
+                "flex-1 py-2 text-[11px] transition-colors border-b-2",
+                annotationTab === 'study'
+                  ? "text-medical-400 border-medical-500 bg-medical-500/10"
+                  : "text-gray-500 border-transparent hover:text-gray-300"
+              )}
+            >
+              当前检查
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 space-y-2">
+            {Object.keys(groupedAnnotations).length === 0 ? (
+              <div className="text-[11px] text-gray-600 text-center py-8">
+                暂无标注
+              </div>
+            ) : (
+              Object.entries(groupedAnnotations).map(([type, anns]) => (
+                <div key={type} className="space-y-1">
+                  <div className="flex items-center gap-1.5 px-1 py-1">
+                    <span className="text-[11px] text-gray-400 font-medium">
+                      {getAnnotationTypeName(type)}
+                    </span>
+                    <span className="text-[10px] text-gray-600">
+                      ({anns.length})
+                    </span>
+                    <div className="flex-1 h-px bg-viewer-border ml-1" />
+                  </div>
+                  {anns.map((ann) => (
+                    <div
+                      key={ann.id}
+                      onClick={() => setHighlightedAnnId(ann.id)}
+                      onMouseEnter={() => setHighlightedAnnId(ann.id)}
+                      onMouseLeave={() => setHighlightedAnnId(null)}
+                      className={cn(
+                        "group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors",
+                        highlightedAnnId === ann.id
+                          ? "bg-amber-500/15 border border-amber-500/40"
+                          : "hover:bg-viewer-bg border border-transparent"
+                      )}
+                    >
+                      <span className={cn(
+                        "w-5 h-5 rounded flex items-center justify-center text-[10px] shrink-0",
+                        highlightedAnnId === ann.id ? "bg-amber-500/30 text-amber-300" : "bg-gray-700/50 text-gray-400"
+                      )}>
+                        {getAnnotationIcon(type)}
+                      </span>
+                      <span className="text-[11px] text-gray-300 flex-1 truncate">
+                        {getAnnotationSummary(ann)}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          removeAnnotationById(ann.id)
+                        }}
+                        className="w-5 h-5 rounded flex items-center justify-center text-gray-600 hover:bg-red-500/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {!annotationPanelOpen && (
+          <button
+            onClick={() => setAnnotationPanelOpen(true)}
+            className="w-5 bg-viewer-panel border-l border-viewer-border flex items-center justify-center text-gray-500 hover:text-gray-300 hover:bg-viewer-bg shrink-0 transition-colors"
+            title="展开标注列表"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       <div className="h-8 bg-viewer-panel border-t border-viewer-border flex items-center px-4 gap-6 shrink-0 text-[11px] font-mono">
@@ -1443,6 +1715,8 @@ export default function ViewerPage() {
           <span className="text-green-400">{(zoom * 100).toFixed(0)}%</span>
           <span className="text-gray-600">|</span>
           <span className="text-purple-400">标注: {annotations.length}</span>
+          <span className="text-gray-600">|</span>
+          <span className="text-amber-400">关键图: {keyImages.length}</span>
           {compareMode && (
             <>
               <span className="text-gray-600">|</span>
@@ -1460,3 +1734,4 @@ export default function ViewerPage() {
     </div>
   )
 }
+

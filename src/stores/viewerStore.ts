@@ -5,6 +5,7 @@ import type {
   Pan,
   WindowLevel,
   Annotation,
+  KeyImage,
 } from '@/types'
 
 interface WindowPreset {
@@ -33,6 +34,7 @@ interface PerStudyViewerState {
   windowLevel: WindowLevel
   annotations: Annotation[]
   expandedSeries: Set<string>
+  keyImages: KeyImage[]
 }
 
 interface ViewerState {
@@ -64,6 +66,7 @@ interface ViewerState {
   setActiveTool: (tool: ToolType) => void
   addAnnotation: (annotation: Annotation) => void
   removeAnnotation: (id: string) => void
+  removeAnnotationById: (id: string) => void
   clearAnnotations: () => void
   undoAnnotation: () => void
   setSyncMode: (v: boolean) => void
@@ -72,6 +75,11 @@ interface ViewerState {
   toggleSeriesExpanded: (id: string) => void
   setMouseCoord: (x: number, y: number, hu: number) => void
   resetView: () => void
+  addKeyImage: (keyImage: Omit<KeyImage, 'id' | 'createdAt'>) => void
+  removeKeyImage: (id: string) => void
+  updateKeyImageNote: (id: string, note: string) => void
+  toggleKeyImageCurrent: () => void
+  getKeyImagesForStudy: (studyId: string) => KeyImage[]
 }
 
 const createDefaultStudyState = (): PerStudyViewerState => ({
@@ -85,6 +93,7 @@ const createDefaultStudyState = (): PerStudyViewerState => ({
   windowLevel: { center: 40, width: 400 },
   annotations: [],
   expandedSeries: new Set<string>(),
+  keyImages: [],
 })
 
 export const useViewerStore = create<ViewerState>((set, get) => ({
@@ -432,5 +441,82 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         },
       },
     })
+  },
+
+  removeAnnotationById: (id) => {
+    const { activeStudyId, viewerByStudy } = get()
+    if (!activeStudyId || !viewerByStudy[activeStudyId]) return
+    const study = viewerByStudy[activeStudyId]
+    set({
+      viewerByStudy: {
+        ...viewerByStudy,
+        [activeStudyId]: {
+          ...study,
+          annotations: study.annotations.filter((a) => a.id !== id),
+        },
+      },
+    })
+  },
+
+  addKeyImage: (keyImage) => {
+    const { activeStudyId, viewerByStudy } = get()
+    if (!activeStudyId || !viewerByStudy[activeStudyId]) return
+    const study = viewerByStudy[activeStudyId]
+    const newKeyImage: KeyImage = {
+      ...keyImage,
+      id: `ki_${Date.now()}`,
+      createdAt: new Date().toISOString(),
+    }
+    set({
+      viewerByStudy: {
+        ...viewerByStudy,
+        [activeStudyId]: {
+          ...study,
+          keyImages: [...study.keyImages, newKeyImage],
+        },
+      },
+    })
+  },
+
+  removeKeyImage: (id) => {
+    const { activeStudyId, viewerByStudy } = get()
+    if (!activeStudyId || !viewerByStudy[activeStudyId]) return
+    const study = viewerByStudy[activeStudyId]
+    set({
+      viewerByStudy: {
+        ...viewerByStudy,
+        [activeStudyId]: {
+          ...study,
+          keyImages: study.keyImages.filter((k) => k.id !== id),
+        },
+      },
+    })
+  },
+
+  updateKeyImageNote: (id, note) => {
+    const { activeStudyId, viewerByStudy } = get()
+    if (!activeStudyId || !viewerByStudy[activeStudyId]) return
+    const study = viewerByStudy[activeStudyId]
+    set({
+      viewerByStudy: {
+        ...viewerByStudy,
+        [activeStudyId]: {
+          ...study,
+          keyImages: study.keyImages.map((k) =>
+            k.id === id ? { ...k, note } : k
+          ),
+        },
+      },
+    })
+  },
+
+  toggleKeyImageCurrent: () => {
+    const { activeStudyId, viewerByStudy } = get()
+    if (!activeStudyId || !viewerByStudy[activeStudyId]) return
+  },
+
+  getKeyImagesForStudy: (studyId) => {
+    const { viewerByStudy } = get()
+    return viewerByStudy[studyId]?.keyImages ?? []
   },
 }))

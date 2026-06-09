@@ -28,9 +28,12 @@ import {
   ThumbsUp,
   ThumbsDown,
   Image as ImageIcon,
+  BookOpen,
+  ArrowRight,
 } from 'lucide-react'
 import { useStudyStore } from '@/stores/studyStore'
 import { useReportStore } from '@/stores/reportStore'
+import { useViewerStore } from '@/stores/viewerStore'
 import { useAuthStore } from '@/stores/authStore'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -39,7 +42,7 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/Tabs'
 import { cn } from '@/lib/utils'
-import type { ReportStatus, ReportTemplate } from '@/types'
+import type { ReportStatus, ReportTemplate, ReportVersion, ReportVersionAction } from '@/types'
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -82,6 +85,24 @@ const AI_SUGGESTIONS = [
   '建议请相关科室会诊，制定进一步诊疗方案。',
 ]
 
+const VERSION_ACTION_COLORS: Record<ReportVersionAction, string> = {
+  create_draft: 'bg-slate-500',
+  save_draft: 'bg-blue-500',
+  submit: 'bg-amber-500',
+  audit_approve: 'bg-emerald-500',
+  audit_reject: 'bg-red-500',
+}
+
+const formatDateTime = (iso: string) => {
+  const d = new Date(iso)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${day} ${h}:${min}`
+}
+
 export default function ReportPage() {
   const { studyId } = useParams<{ studyId: string }>()
   const navigate = useNavigate()
@@ -98,7 +119,12 @@ export default function ReportPage() {
     saveDraft,
     submitReport,
     auditReport,
+    getVersionsForStudy,
   } = useReportStore()
+  const {
+    getKeyImagesForStudy,
+    updateKeyImageNote,
+  } = useViewerStore()
   const { currentUser } = useAuthStore()
 
   const study = useMemo(() => {
@@ -115,6 +141,8 @@ export default function ReportPage() {
   }, [study?.id, setActiveStudy])
 
   const active = getActive()
+  const keyImages = useViewerStore(s => s.getKeyImagesForStudy(study?.id || ''))
+  const versions = useReportStore(s => s.getVersionsForStudy(study?.id || ''))
 
   const rawStatus = active.currentReport?.status
   const effectiveStatus: EffectiveStatus = rawStatus || 'not_started'
@@ -133,9 +161,10 @@ export default function ReportPage() {
   const [favorites, setFavorites] = useState<Set<string>>(
     new Set(templates.filter((t) => t.isFavorite).map((t) => t.id))
   )
-  const [imageDescriptions, setImageDescriptions] = useState<string[]>(['', '', '', ''])
   const [auditComment, setAuditComment] = useState('')
   const [isSigning, setIsSigning] = useState(false)
+  const [versionHistoryCollapsed, setVersionHistoryCollapsed] = useState(false)
+  const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(new Set())
 
   const findingsRef = useRef<HTMLTextAreaElement>(null)
   const impressionRef = useRef<HTMLTextAreaElement>(null)
@@ -146,6 +175,13 @@ export default function ReportPage() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
     }, 3000)
+  }
+
+  const getLatestVersionMessage = () => {
+    const vs = getVersionsForStudy(study?.id || '')
+    if (vs.length === 0) return ''
+    const latest = vs[vs.length - 1]
+    return `版本 V${latest.version} 已保存`
   }
 
   const filteredTemplates = useMemo(() => {
@@ -172,13 +208,15 @@ export default function ReportPage() {
   const handleSaveDraft = () => {
     if (!currentUser) return
     saveDraft(currentUser.id)
-    showToast('草稿已保存', 'success')
+    const verMsg = getLatestVersionMessage()
+    showToast(`草稿已保存${verMsg ? ' · ' + verMsg : ''}`, 'success')
   }
 
   const handleSubmitReport = () => {
     if (!currentUser) return
     submitReport(currentUser.id)
-    showToast('已提交审核', 'success')
+    const verMsg = getLatestVersionMessage()
+    showToast(`已提交审核${verMsg ? ' · ' + verMsg : ''}`, 'success')
   }
 
   const handleApplyTemplate = (templateId: string) => {
@@ -266,13 +304,15 @@ export default function ReportPage() {
       setIsSigning(false)
       setShowSignatureModal(false)
       setSignaturePassword('')
-      showToast('电子签名成功，报告已审核', 'success')
+      const verMsg = getLatestVersionMessage()
+      showToast(`电子签名成功，报告已审核${verMsg ? ' · ' + verMsg : ''}`, 'success')
     }, 800)
   }
 
   const handleAuditApprove = () => {
     auditReport('approved', currentUser?.id || 'U001', auditComment || '审核通过')
-    showToast('审核通过', 'success')
+    const verMsg = getLatestVersionMessage()
+    showToast(`审核通过${verMsg ? ' · ' + verMsg : ''}`, 'success')
   }
 
   const handleAuditReject = () => {
@@ -281,12 +321,26 @@ export default function ReportPage() {
       return
     }
     auditReport('rejected', currentUser?.id || 'U001', auditComment)
-    showToast('报告已退回', 'warning')
+    const verMsg = getLatestVersionMessage()
+    showToast(`报告已退回${verMsg ? ' · ' + verMsg : ''}`, 'warning')
   }
 
   const toggleSection = (key: string) => {
     setCollapsedSections((prev) => ({ ...prev, [key]: !prev[key] }))
   }
+
+  const toggleVersionExpand = (verId: string) => {
+    setExpandedVersionIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(verId)) next.delete(verId)
+      else next.add(verId)
+      return next
+    })
+  }
+
+  const sortedVersions = useMemo(() => {
+    return [...versions].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  }, [versions])
 
   const timelineSteps = [
     { key: 'draft', label: '草稿创建', done: ['draft', 'submitted', 'reviewing', 'approved', 'rejected'].includes(effectiveStatus) },
@@ -724,40 +778,179 @@ export default function ReportPage() {
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <ImageIcon size={16} className="text-blue-600" />
-                <h3 className="font-semibold text-sm text-slate-900">关联影像</h3>
+                <h3 className="font-semibold text-sm text-slate-900">
+                  关联影像（{keyImages.length}张）
+                </h3>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {[0, 1, 2, 3].map((idx) => {
-                  const series = study?.series?.[idx % (study?.series?.length || 1)]
-                  return (
-                    <div key={idx} className="space-y-1.5">
+              {keyImages.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-center space-y-2">
+                  <ImageIcon size={28} className="mx-auto text-slate-300" />
+                  <p className="text-xs text-slate-500">
+                    尚未添加关键图，前往阅片页→📌设为关键图
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => navigate(`/viewer/${study?.id}`)}
+                    className="mt-1"
+                  >
+                    <ArrowRight size={12} />
+                    前往阅片页
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {keyImages.map((ki) => (
+                    <div key={ki.id} className="space-y-1.5">
                       <div className="group relative aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-900">
                         <img
-                          src={series?.thumbnail || series?.images?.[0]?.url}
-                          alt={`影像 ${idx + 1}`}
+                          src={ki.imageUrl}
+                          alt={`关键图 ${ki.id}`}
                           className="w-full h-full object-cover"
                         />
+                        <div className="absolute top-1 left-1">
+                          <span className="inline-flex items-center rounded-md bg-red-500/90 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-sm">
+                            KEY 📌
+                          </span>
+                        </div>
                         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-1.5">
                           <span className="text-[10px] text-white truncate w-full">
-                            {series?.description?.slice(0, 12) || `序列 ${idx + 1}`}
+                            {ki.seriesDescription?.slice(0, 12) || '关键图'}
                           </span>
                         </div>
                       </div>
-                      <input
-                        type="text"
-                        placeholder="添加说明..."
-                        value={imageDescriptions[idx]}
-                        onChange={(e) => {
-                          const next = [...imageDescriptions]
-                          next[idx] = e.target.value
-                          setImageDescriptions(next)
-                        }}
-                        className="w-full h-7 rounded-md border border-slate-200 px-2 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-100 outline-none"
+                      <textarea
+                        placeholder="补充说明..."
+                        value={ki.note}
+                        onChange={(e) => updateKeyImageNote(ki.id, e.target.value)}
+                        className="w-full min-h-[52px] rounded-md border border-slate-200 p-1.5 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-100 outline-none resize-none leading-relaxed"
                       />
+                      <div className="space-y-0.5 px-0.5">
+                        <p className="text-[10px] text-slate-500 truncate">
+                          {ki.seriesDescription || '系列'} · 第{ki.instanceNumber}帧
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          WW {ki.windowWidth} / WC {ki.windowCenter}
+                        </p>
+                      </div>
                     </div>
-                  )
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <button
+                onClick={() => setVersionHistoryCollapsed(!versionHistoryCollapsed)}
+                className="w-full flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2 mb-4">
+                  <BookOpen size={16} className="text-blue-600" />
+                  <h3 className="font-semibold text-sm text-slate-900">版本历史</h3>
+                  {sortedVersions.length > 0 && (
+                    <Badge variant="info" className="text-[10px] h-5 px-1.5">
+                      {sortedVersions.length}
+                    </Badge>
+                  )}
+                </div>
+                {versionHistoryCollapsed ? (
+                  <ChevronDown size={16} className="text-slate-400 mb-4" />
+                ) : (
+                  <ChevronUp size={16} className="text-slate-400 mb-4" />
+                )}
+              </button>
+              {!versionHistoryCollapsed && (
+                <>
+                  {sortedVersions.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-center space-y-1">
+                      <Clock size={24} className="mx-auto text-slate-300" />
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        暂无版本记录，保存草稿或提交审核后自动生成版本
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                      {sortedVersions.map((ver) => (
+                        <div key={ver.id} className="relative pl-7">
+                          <div
+                            className={cn(
+                              'absolute left-0 top-1 h-5 w-5 rounded-full flex items-center justify-center ring-4 ring-white z-10',
+                              VERSION_ACTION_COLORS[ver.action]
+                            )}
+                          >
+                            {ver.action === 'audit_approve' && <Check size={11} className="text-white" />}
+                            {ver.action === 'audit_reject' && <X size={11} className="text-white" />}
+                          </div>
+                          <Card className={cn(
+                            'border transition-colors',
+                            expandedVersionIds.has(ver.id) ? 'border-blue-200 bg-blue-50/20' : 'border-slate-200'
+                          )}>
+                            <CardContent className="p-3 space-y-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <Badge variant="default" className="text-[10px] h-5 px-1.5">
+                                    V{ver.version}
+                                  </Badge>
+                                  <span className="text-xs font-medium text-slate-800">
+                                    {ver.actionLabel}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-slate-400 shrink-0">
+                                  {formatDateTime(ver.createdAt)}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-600 leading-snug">
+                                <span className="text-slate-500">操作人：</span>
+                                <span className="font-medium text-slate-700">{ver.operatorName}</span>
+                                {ver.comment && (
+                                  <>
+                                    <span className="mx-1 text-slate-300">·</span>
+                                    <span className="text-slate-600">{ver.comment}</span>
+                                  </>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => toggleVersionExpand(ver.id)}
+                                className="flex items-center gap-1 text-[10px] text-blue-600 hover:text-blue-700 transition-colors"
+                              >
+                                {expandedVersionIds.has(ver.id) ? (
+                                  <ChevronUp size={11} />
+                                ) : (
+                                  <ChevronRight size={11} />
+                                )}
+                                {expandedVersionIds.has(ver.id) ? '收起快照内容' : '查看快照内容'}
+                              </button>
+                              {expandedVersionIds.has(ver.id) && (
+                                <div className="rounded-md bg-slate-50 border border-slate-200 p-2.5 space-y-2.5 max-h-[200px] overflow-y-auto">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-1 text-[10px] font-semibold text-slate-600 uppercase tracking-wider">
+                                      <FileText size={10} />
+                                      影像所见
+                                    </div>
+                                    <p className="text-[11px] text-slate-700 leading-relaxed whitespace-pre-wrap">
+                                      {ver.findingsSnapshot || <span className="text-slate-400 italic">（空）</span>}
+                                    </p>
+                                  </div>
+                                  <div className="h-px bg-slate-200" />
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-1 text-[10px] font-semibold text-slate-600 uppercase tracking-wider">
+                                      <Sparkles size={10} />
+                                      诊断结论
+                                    </div>
+                                    <p className="text-[11px] text-slate-700 leading-relaxed whitespace-pre-wrap">
+                                      {ver.impressionSnapshot || <span className="text-slate-400 italic">（空）</span>}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </CardContent>
+                          </Card>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             <div>

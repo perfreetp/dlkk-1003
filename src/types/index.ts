@@ -73,6 +73,38 @@ export interface KeyImageRef {
   annotation?: string;
 }
 
+export interface KeyImage {
+  id: string;
+  studyId: string;
+  seriesId: string;
+  imageId: string;
+  instanceNumber: number;
+  imageUrl: string;
+  seriesDescription: string;
+  note: string;
+  createdAt: string;
+  windowCenter: number;
+  windowWidth: number;
+}
+
+export type ReportVersionAction = 'create_draft' | 'save_draft' | 'submit' | 'audit_approve' | 'audit_reject'
+export type ReportStatusForVersion = 'draft' | 'submitted' | 'reviewing' | 'approved' | 'rejected'
+
+export interface ReportVersion {
+  id: string;
+  studyId: string;
+  version: number;
+  action: ReportVersionAction;
+  actionLabel: string;
+  operatorId: string;
+  operatorName: string;
+  createdAt: string;
+  findingsSnapshot: string;
+  impressionSnapshot: string;
+  statusAfter: ReportStatusForVersion;
+  comment?: string;
+}
+
 export type QCRecordType = 'missing' | 'timeliness' | 'quality';
 
 export type MissingDetectionReviewStatus = 'pending' | 'confirmed' | 'rejected';
